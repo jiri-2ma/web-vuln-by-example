@@ -1,0 +1,33 @@
+{
+  "name": "web-vuln-by-example",
+  "version": "1.0.0",
+  "description": "37 hands-on web security labs — vulnerable + fixed side-by-side with source code explanations",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "web-security",
+    "owasp",
+    "xss",
+    "sql-injection",
+    "csrf",
+    "ssrf",
+    "vulnerable-web-app",
+    "security-training",
+    "ethical-hacking",
+    "owasp-top-10"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "dompurify": "^3.3.1",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.4.1",
+    "jsdom": "^28.1.0",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

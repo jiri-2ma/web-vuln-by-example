@@ -1,0 +1,7 @@
+node_modules
+lab-files
+.git
+.claude
+*.md
+LICENSE
+.gitignore
