@@ -418,6 +418,18 @@ app.get("/", (req, res) => {
         /race-condition-fixed — mutex serialization (safe)
       </a>
     </section>
+
+    <h2 style="color:#666;">Cryptography &amp; Input Handling</h2>
+
+    <section>
+      <h2>Lab 42 — Timing Attack on String Comparison (CWE-208)</h2>
+      <a class="vuln" href="/timing-attack">
+        /timing-attack — early-exit === leaks secret length (vulnerable)
+      </a>
+      <a class="safe" href="/timing-attack-fixed">
+        /timing-attack-fixed — constant-time comparison (safe)
+      </a>
+    </section>
   `);
 });
 
@@ -5068,6 +5080,188 @@ app.post("/xxe-fixed", (req, res) => {
     <p style="color:green;">&#10004; No DTD/entity declarations — XML parsed safely.</p>
     ${parsed ? `<pre ${PRE}>${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>` : ""}
     ${error ? `<pre style="color:red;">${escapeHtml(error)}</pre>` : ""}
+  `);
+});
+
+/* ========================================================================
+   LAB 42 — Timing Attack on String Comparison (CWE-208)
+   ======================================================================== */
+app.use("/timing-attack", express.urlencoded({ extended: true }));
+app.use("/timing-attack-fixed", express.urlencoded({ extended: true }));
+
+const TIMING_SECRET = crypto.randomBytes(16).toString("hex");
+
+app.get("/timing-attack", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 42a: Timing Attack — Unsafe Comparison (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Guess the API secret key. The server uses <code>===</code> to compare — each correct character
+       takes slightly longer, leaking information through response time.</p>
+    <form method="post">
+      <label>API Key guess: <input type="text" name="guess" value="" size="40" placeholder="try different lengths..."></label><br><br>
+      <button type="submit">Verify</button>
+    </form>
+    <p class="info">Secret length: ${TIMING_SECRET.length} chars (hex). In a real attack, even the length is unknown.</p>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Vulnerable: === exits on first mismatch</span>
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">checkKey</span>(input, secret) {
+  <span style="color:#c586c0;">if</span> (input.length !== secret.length) <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">false</span>;
+  <span style="color:#c586c0;">for</span> (<span style="color:#9cdcfe;">let</span> i = <span style="color:#b5cea8;">0</span>; i &lt; input.length; i++) {
+    <span style="color:#c586c0;">if</span> (input[i] !== secret[i]) <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">false</span>; <span style="color:#608b4e;">// &#9888; early exit!</span>
+  }
+  <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">true</span>;
+}
+
+<span style="color:#608b4e;">// Equivalent to: input === secret</span>
+<span style="color:#608b4e;">// Both leak timing info — the more correct chars, the longer it takes.</span></code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker sends guesses and measures response time (microseconds)</li>
+      <li>A guess with the correct first character takes slightly longer (one more loop iteration)</li>
+      <li>Attacker brute-forces character by character: 16×32 guesses for a 32-char hex key instead of 16<sup>32</sup></li>
+      <li>Time complexity drops from O(n<sup>k</sup>) to O(n×k) — from impossible to trivial</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <p>The <code>===</code> operator (and any loop with early exit) returns <code>false</code>
+         as soon as a mismatch is found. This means correct prefixes take measurably longer
+         than wrong ones. Over many requests, statistical analysis can recover the secret
+         one byte at a time.</p>
+      <p>This attack works on: API keys, HMAC signatures, CSRF tokens, password reset tokens,
+         and any secret compared with <code>===</code> or manual loops.</p>
+    </details>
+  `);
+});
+
+app.post("/timing-attack", (req, res) => {
+  const guess = req.body.guess || "";
+
+  // Vulnerable: early-exit comparison with artificial delay to make timing visible
+  const start = process.hrtime.bigint();
+  let match = true;
+  if (guess.length !== TIMING_SECRET.length) {
+    match = false;
+  } else {
+    for (let i = 0; i < guess.length; i++) {
+      // Artificial 0.1ms delay per matching char to make the timing difference visible in a demo
+      if (guess[i] === TIMING_SECRET[i]) {
+        const wait = process.hrtime.bigint() + 100000n; // 0.1ms
+        while (process.hrtime.bigint() < wait) { /* busy wait */ }
+      } else {
+        match = false;
+        break; // Early exit — leaks position of first mismatch
+      }
+    }
+  }
+  const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
+
+  // Count matching prefix length
+  let correctPrefix = 0;
+  for (let i = 0; i < Math.min(guess.length, TIMING_SECRET.length); i++) {
+    if (guess[i] === TIMING_SECRET[i]) correctPrefix++;
+    else break;
+  }
+
+  res.type("html").send(`
+    <h1>Lab 42a: Timing Attack — Result (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/timing-attack">Try again</a></p>
+
+    <h3>Comparison Result</h3>
+    <p>Your guess: <code>${escapeHtml(guess)}</code> (${guess.length} chars)</p>
+    <p>Match: ${match
+      ? '<span style="color:green;font-weight:bold;">YES — correct key!</span>'
+      : '<span style="color:red;">NO</span>'}</p>
+    <p>Response time: <strong>${elapsed.toFixed(3)} ms</strong></p>
+    <p>Correct prefix length: <strong style="color:${correctPrefix > 0 ? "orange" : "red"};">${correctPrefix}</strong> characters</p>
+
+    ${!match ? `
+      <p style="color:red;">&#9888; The response time correlates with the number of correct characters.
+         An attacker can measure this to brute-force the key one character at a time.</p>
+      <p class="info">Hint: first 4 chars of the secret are <code>${escapeHtml(TIMING_SECRET.substring(0, 4))}...</code></p>
+    ` : ""}
+  `);
+});
+
+app.get("/timing-attack-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 42b: Timing Attack — Constant-Time Comparison (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Same secret, but compared with <code>crypto.timingSafeEqual()</code> — response time
+       is constant regardless of how many characters match.</p>
+    <form method="post">
+      <label>API Key guess: <input type="text" name="guess" value="" size="40" placeholder="try different lengths..."></label><br><br>
+      <button type="submit">Verify</button>
+    </form>
+    <p class="info">Secret length: ${TIMING_SECRET.length} chars. Try the same guesses from the vulnerable version.</p>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Fixed: constant-time comparison</span>
+<span style="color:#9cdcfe;">const</span> crypto = require(<span style="color:#ce9178;">"crypto"</span>);
+
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">safeCheckKey</span>(input, secret) {
+  <span style="color:#608b4e;">// Pad to same length to avoid leaking length info</span>
+  <span style="color:#9cdcfe;">const</span> a = <span style="color:#4ec9b0;">Buffer</span>.from(input.padEnd(secret.length));
+  <span style="color:#9cdcfe;">const</span> b = <span style="color:#4ec9b0;">Buffer</span>.from(secret);
+  <span style="color:#c586c0;">if</span> (a.length !== b.length) <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">false</span>;
+  <span style="color:#c586c0;">return</span> crypto.<span style="color:#dcdcaa;">timingSafeEqual</span>(a, b)
+    &amp;&amp; input.length === secret.length;
+}</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <p><code>crypto.timingSafeEqual()</code> always compares every byte, regardless of where
+         mismatches occur. The comparison takes the same amount of time whether 0 or all
+         characters match, making timing analysis useless.</p>
+      <p>The length check uses <code>padEnd</code> to ensure both buffers are the same size
+         before comparison, preventing length-based timing leaks while still rejecting
+         wrong-length inputs.</p>
+    </details>
+  `);
+});
+
+app.post("/timing-attack-fixed", (req, res) => {
+  const guess = req.body.guess || "";
+
+  const start = process.hrtime.bigint();
+  // Fixed: constant-time comparison
+  let match = false;
+  const padded = guess.padEnd(TIMING_SECRET.length);
+  const a = Buffer.from(padded);
+  const b = Buffer.from(TIMING_SECRET);
+  if (a.length === b.length) {
+    match = crypto.timingSafeEqual(a, b) && guess.length === TIMING_SECRET.length;
+  }
+  const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
+
+  // Count matching prefix (for display only — the server doesn't leak this via timing)
+  let correctPrefix = 0;
+  for (let i = 0; i < Math.min(guess.length, TIMING_SECRET.length); i++) {
+    if (guess[i] === TIMING_SECRET[i]) correctPrefix++;
+    else break;
+  }
+
+  res.type("html").send(`
+    <h1>Lab 42b: Timing Attack — Result (Fixed)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/timing-attack-fixed">Try again</a></p>
+
+    <h3>Comparison Result</h3>
+    <p>Your guess: <code>${escapeHtml(guess)}</code> (${guess.length} chars)</p>
+    <p>Match: ${match
+      ? '<span style="color:green;font-weight:bold;">YES — correct key!</span>'
+      : '<span style="color:red;">NO</span>'}</p>
+    <p>Response time: <strong>${elapsed.toFixed(3)} ms</strong></p>
+
+    <p style="color:green;font-weight:bold;">&#10004; Response time is constant regardless of correct prefix length.</p>
+    <p>Correct prefix: ${correctPrefix} chars — but the attacker can't determine this from timing.</p>
+    <p class="info">Compare the response times between this and the vulnerable version with the same inputs.
+       The vulnerable version's time increases with each correct character; this one stays flat.</p>
   `);
 });
 
