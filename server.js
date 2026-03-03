@@ -418,6 +418,18 @@ app.get("/", (req, res) => {
         /race-condition-fixed — mutex serialization (safe)
       </a>
     </section>
+
+    <h2 style="color:#666;">Cryptography &amp; Input Handling</h2>
+
+    <section>
+      <h2>Lab 41 — Prototype Pollution (CWE-1321)</h2>
+      <a class="vuln" href="/proto-pollution">
+        /proto-pollution — unsafe object merge via __proto__ (vulnerable)
+      </a>
+      <a class="safe" href="/proto-pollution-fixed">
+        /proto-pollution-fixed — safe merge with key filtering (safe)
+      </a>
+    </section>
   `);
 });
 
@@ -5068,6 +5080,207 @@ app.post("/xxe-fixed", (req, res) => {
     <p style="color:green;">&#10004; No DTD/entity declarations — XML parsed safely.</p>
     ${parsed ? `<pre ${PRE}>${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>` : ""}
     ${error ? `<pre style="color:red;">${escapeHtml(error)}</pre>` : ""}
+  `);
+});
+
+/* ========================================================================
+   LAB 41 — Prototype Pollution (CWE-1321)
+   ======================================================================== */
+app.use("/proto-pollution", express.json());
+app.use("/proto-pollution-fixed", express.json());
+
+// Unsafe recursive merge — does not filter __proto__ or constructor
+function unsafeMerge(target, source) {
+  for (const key in source) {
+    if (typeof source[key] === "object" && source[key] !== null && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      unsafeMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+// Safe recursive merge — blocks dangerous keys
+function safeMerge(target, source) {
+  for (const key in source) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (typeof source[key] === "object" && source[key] !== null && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      safeMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+app.get("/proto-pollution", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 41a: Prototype Pollution (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>This app merges user-supplied JSON into a config object. Try injecting <code>__proto__</code>:</p>
+    <form id="ppform">
+      <textarea id="ppinput" rows="6" cols="50">{"__proto__": {"isAdmin": true}}</textarea><br><br>
+      <button type="submit">Merge Config</button>
+    </form>
+    <p class="info">The payload pollutes <code>Object.prototype</code>, so <em>every</em> object inherits <code>isAdmin: true</code>.</p>
+    <div id="result"></div>
+    <hr>
+
+    <script>
+      document.getElementById("ppform").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const body = document.getElementById("ppinput").value;
+        const resp = await fetch("/proto-pollution", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body
+        });
+        document.getElementById("result").innerHTML = await resp.text();
+      });
+    </script>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Unsafe merge — no key filtering</span>
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">unsafeMerge</span>(target, source) {
+  <span style="color:#c586c0;">for</span> (<span style="color:#9cdcfe;">const</span> key <span style="color:#c586c0;">in</span> source) {
+    <span style="color:#c586c0;">if</span> (<span style="color:#569cd6;">typeof</span> source[key] === <span style="color:#ce9178;">"object"</span>) {
+      <span style="color:#c586c0;">if</span> (!target[key]) target[key] = {};
+      unsafeMerge(target[key], source[key]);
+    } <span style="color:#c586c0;">else</span> {
+      target[key] = source[key]; <span style="color:#608b4e;">// &#9888; writes to __proto__!</span>
+    }
+  }
+}</code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker sends <code>{"__proto__": {"isAdmin": true}}</code></li>
+      <li><code>unsafeMerge</code> recurses into <code>__proto__</code> as a normal key</li>
+      <li>This writes to <code>Object.prototype.isAdmin = true</code></li>
+      <li>Now <code>{}.isAdmin === true</code> for every object in the process</li>
+      <li>Authorization checks like <code>if (user.isAdmin)</code> are bypassed</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <p>Prototype pollution modifies the prototype chain shared by all objects. It can lead to:</p>
+      <ul>
+        <li><strong>Privilege escalation:</strong> inject <code>isAdmin</code>, <code>role</code>, etc.</li>
+        <li><strong>RCE:</strong> pollute properties read by templating engines or child_process</li>
+        <li><strong>DoS:</strong> override <code>toString</code> or <code>valueOf</code> to crash the app</li>
+      </ul>
+      <p>Lab 14 shows prototype pollution leading to XSS. This lab covers the general case.</p>
+    </details>
+  `);
+});
+
+app.post("/proto-pollution", (req, res) => {
+  // Use a fresh object per request to avoid cross-request pollution
+  const config = { theme: "light", lang: "en" };
+  const userInput = req.body;
+
+  unsafeMerge(config, userInput);
+
+  // Check if prototype was polluted
+  const emptyObj = {};
+  const pollutedKeys = Object.keys(userInput.__proto__ || userInput["__proto__"] || {});
+  const isPolluted = pollutedKeys.some((k) => emptyObj[k] !== undefined && !(k in {}));
+
+  // Simulate an authorization check
+  const user = { name: "regular_user" };
+  const hasAdmin = user.isAdmin;
+
+  res.type("html").send(`
+    <h3>Merge Result</h3>
+    <p>Config after merge:</p>
+    <pre ${PRE}>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+
+    <h3>Pollution Check</h3>
+    <p>New empty object <code>{}.isAdmin</code> = <code>${escapeHtml(String(emptyObj.isAdmin))}</code></p>
+    ${hasAdmin
+      ? `<p style="color:red;font-weight:bold;">&#9888; Prototype polluted! A plain user object now has <code>isAdmin: ${escapeHtml(String(hasAdmin))}</code></p>
+         <p>Any authorization check like <code>if (user.isAdmin)</code> is now bypassed for ALL users.</p>`
+      : `<p style="color:green;">Prototype not polluted (try the <code>__proto__</code> payload above).</p>`}
+  `);
+});
+
+app.get("/proto-pollution-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 41b: Prototype Pollution (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Same merge operation, but dangerous keys are filtered:</p>
+    <form id="ppform">
+      <textarea id="ppinput" rows="6" cols="50">{"__proto__": {"isAdmin": true}}</textarea><br><br>
+      <button type="submit">Merge Config</button>
+    </form>
+    <div id="result"></div>
+    <hr>
+
+    <script>
+      document.getElementById("ppform").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const body = document.getElementById("ppinput").value;
+        const resp = await fetch("/proto-pollution-fixed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body
+        });
+        document.getElementById("result").innerHTML = await resp.text();
+      });
+    </script>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Safe merge — blocks __proto__, constructor, prototype</span>
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">safeMerge</span>(target, source) {
+  <span style="color:#c586c0;">for</span> (<span style="color:#9cdcfe;">const</span> key <span style="color:#c586c0;">in</span> source) {
+    <span style="color:#c586c0;">if</span> (key === <span style="color:#ce9178;">"__proto__"</span> || key === <span style="color:#ce9178;">"constructor"</span> || key === <span style="color:#ce9178;">"prototype"</span>) <span style="color:#c586c0;">continue</span>;
+    <span style="color:#c586c0;">if</span> (<span style="color:#569cd6;">typeof</span> source[key] === <span style="color:#ce9178;">"object"</span>) {
+      <span style="color:#c586c0;">if</span> (!target[key]) target[key] = {};
+      safeMerge(target[key], source[key]);
+    } <span style="color:#c586c0;">else</span> {
+      target[key] = source[key];
+    }
+  }
+}</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <p>The fix skips <code>__proto__</code>, <code>constructor</code>, and <code>prototype</code>
+         keys during merge. These are the only keys that can reach the prototype chain.</p>
+      <p>Better alternatives:</p>
+      <ul>
+        <li>Use <code>Object.create(null)</code> for config objects (no prototype)</li>
+        <li>Use <code>Map</code> instead of plain objects</li>
+        <li>Use <code>Object.freeze(Object.prototype)</code> to prevent modifications</li>
+        <li>Use a safe merge library that handles this (e.g., lodash ≥4.17.12)</li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/proto-pollution-fixed", (req, res) => {
+  const config = { theme: "light", lang: "en" };
+  const userInput = req.body;
+
+  safeMerge(config, userInput);
+
+  const emptyObj = {};
+  const user = { name: "regular_user" };
+
+  res.type("html").send(`
+    <h3>Merge Result</h3>
+    <p>Config after merge:</p>
+    <pre ${PRE}>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+
+    <h3>Pollution Check</h3>
+    <p>New empty object <code>{}.isAdmin</code> = <code>${escapeHtml(String(emptyObj.isAdmin))}</code></p>
+    <p><code>user.isAdmin</code> = <code>${escapeHtml(String(user.isAdmin))}</code></p>
+    <p style="color:green;font-weight:bold;">&#10004; Prototype is clean. The <code>__proto__</code> key was skipped during merge.</p>
   `);
 });
 
