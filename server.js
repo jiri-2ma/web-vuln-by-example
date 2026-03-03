@@ -418,6 +418,38 @@ app.get("/", (req, res) => {
         /race-condition-fixed — mutex serialization (safe)
       </a>
     </section>
+
+    <h2 style="color:#666;">Cryptography &amp; Input Handling</h2>
+
+    <section>
+      <h2>Lab 38 — HTTP Parameter Pollution (CWE-235)</h2>
+      <a class="vuln" href="/hpp?role=user&role=admin">
+        /hpp — duplicate params bypass validation (vulnerable)
+      </a>
+      <a class="safe" href="/hpp-fixed?role=user&role=admin">
+        /hpp-fixed — strict type checking rejects arrays (safe)
+      </a>
+    </section>
+
+    <section>
+      <h2>Lab 39 — Insecure Password Storage (CWE-916)</h2>
+      <a class="vuln" href="/weak-password">
+        /weak-password — MD5 hash without salt (vulnerable)
+      </a>
+      <a class="safe" href="/weak-password-fixed">
+        /weak-password-fixed — scrypt with random salt (safe)
+      </a>
+    </section>
+
+    <section>
+      <h2>Lab 40 — Host Header Injection (CWE-644)</h2>
+      <a class="vuln" href="/host-header">
+        /host-header — reset link trusts Host header (vulnerable)
+      </a>
+      <a class="safe" href="/host-header-fixed">
+        /host-header-fixed — allowlisted origin (safe)
+      </a>
+    </section>
   `);
 });
 
@@ -5068,6 +5100,439 @@ app.post("/xxe-fixed", (req, res) => {
     <p style="color:green;">&#10004; No DTD/entity declarations — XML parsed safely.</p>
     ${parsed ? `<pre ${PRE}>${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>` : ""}
     ${error ? `<pre style="color:red;">${escapeHtml(error)}</pre>` : ""}
+  `);
+});
+
+/* ========================================================================
+   LAB 38 — HTTP Parameter Pollution (CWE-235)
+   ======================================================================== */
+app.get("/hpp", (req, res) => {
+  const role = req.query.role;
+  // Vulnerable: checks first value but backend uses last value
+  const firstValue = Array.isArray(role) ? role[0] : role;
+  const lastValue = Array.isArray(role) ? role[role.length - 1] : role;
+  const allowed = firstValue === "user";
+  const assignedRole = lastValue;
+
+  res.type("html").send(`
+    <h1>Lab 38a: HTTP Parameter Pollution (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Enter a role to request access:</p>
+    <form method="get">
+      <input name="role" value="user" size="30">
+      <button type="submit">Submit</button>
+    </form>
+    <p><a href="/hpp?role=user&role=admin">Try it: /hpp?role=user&amp;role=admin</a> (duplicate param attack)</p>
+    <hr>
+
+    ${role !== undefined ? `
+      <h3>Result</h3>
+      <p>Raw <code>req.query.role</code> = <code>${escapeHtml(JSON.stringify(role))}</code></p>
+      <p>Validation checked: <code>${escapeHtml(String(firstValue))}</code> → ${allowed
+        ? '<span style="color:green;">allowed</span>'
+        : '<span style="color:red;">denied</span>'}</p>
+      <p>Assigned role: <strong style="color:${assignedRole === "admin" ? "red" : "green"};">${escapeHtml(String(assignedRole))}</strong></p>
+      ${Array.isArray(role) && assignedRole === "admin"
+        ? '<p style="color:red;font-weight:bold;">&#9888; Parameter pollution! Validation saw "user" but the backend assigned "admin".</p>'
+        : ""}
+      <hr>
+    ` : ""}
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Express extended query parser turns ?role=user&role=admin into ["user","admin"]</span>
+<span style="color:#9cdcfe;">const</span> role = req.query.role;
+
+<span style="color:#608b4e;">// Vulnerable: validation checks first value...</span>
+<span style="color:#9cdcfe;">const</span> firstValue = <span style="color:#4ec9b0;">Array</span>.isArray(role) ? role[<span style="color:#b5cea8;">0</span>] : role;
+<span style="color:#608b4e;">// ...but backend uses last value</span>
+<span style="color:#9cdcfe;">const</span> lastValue = <span style="color:#4ec9b0;">Array</span>.isArray(role) ? role[role.length - <span style="color:#b5cea8;">1</span>] : role;
+
+<span style="color:#c586c0;">if</span> (firstValue === <span style="color:#ce9178;">"user"</span>) {
+  assignRole(lastValue); <span style="color:#608b4e;">// &#9888; attacker gets "admin"!</span>
+}</code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker sends <code>?role=user&amp;role=admin</code></li>
+      <li>Express parses it as <code>["user", "admin"]</code></li>
+      <li>Validation checks <code>role[0]</code> → "user" → allowed</li>
+      <li>Backend reads <code>role[role.length-1]</code> → "admin" → privilege escalation</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why does this happen?</strong></summary>
+      <p>HTTP allows repeated query parameters. Express's <code>extended</code> query parser
+         (powered by the <code>qs</code> library) turns duplicate keys into arrays. If different
+         parts of the application read different indices, an attacker can pass validation with
+         one value while the backend processes another — a classic TOCTOU via parameter pollution.</p>
+    </details>
+  `);
+});
+
+app.get("/hpp-fixed", (req, res) => {
+  const role = req.query.role;
+  // Fixed: reject arrays — only accept string values
+  const isValid = typeof role === "string";
+  const rejected = !isValid && role !== undefined;
+
+  res.type("html").send(`
+    <h1>Lab 38b: HTTP Parameter Pollution (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Enter a role to request access:</p>
+    <form method="get">
+      <input name="role" value="user" size="30">
+      <button type="submit">Submit</button>
+    </form>
+    <p><a href="/hpp-fixed?role=user&role=admin">Try it: /hpp-fixed?role=user&amp;role=admin</a> (duplicate param attack)</p>
+    <hr>
+
+    ${rejected ? `
+      <p style="color:green;font-weight:bold;">&#10004; Rejected! Parameter "role" must be a single string value.</p>
+      <p>Received: <code>${escapeHtml(JSON.stringify(role))}</code> (type: ${typeof role === "object" ? "array" : typeof role})</p>
+      <hr>
+    ` : ""}
+
+    ${isValid ? `
+      <h3>Result</h3>
+      <p>Role: <strong style="color:green;">${escapeHtml(role)}</strong></p>
+      <p style="color:green;">&#10004; Single string value accepted safely.</p>
+      <hr>
+    ` : ""}
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#9cdcfe;">const</span> role = req.query.role;
+
+<span style="color:#608b4e;">// Fixed: strict type check — reject arrays from duplicate params</span>
+<span style="color:#c586c0;">if</span> (<span style="color:#569cd6;">typeof</span> role !== <span style="color:#ce9178;">"string"</span>) {
+  <span style="color:#c586c0;">return</span> res.status(<span style="color:#b5cea8;">400</span>).send(<span style="color:#ce9178;">"role must be a single value"</span>);
+}
+
+<span style="color:#608b4e;">// Now role is guaranteed to be a string, not an array</span>
+assignRole(role);</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <p>The fix checks <code>typeof role !== "string"</code> before processing. If the attacker
+         sends duplicate parameters, Express parses them as an array — which fails the type check.
+         Only a single string value is accepted, eliminating the pollution vector.</p>
+      <p>Other defenses include: using <code>app.set("query parser", "simple")</code> (which uses
+         Node's built-in <code>querystring</code> module and takes the last value), or explicitly
+         extracting only the first value with a middleware wrapper.</p>
+    </details>
+  `);
+});
+
+/* ========================================================================
+   LAB 39 — Insecure Password Storage (CWE-916)
+   ======================================================================== */
+app.use("/weak-password", express.urlencoded({ extended: true }));
+app.use("/weak-password-fixed", express.urlencoded({ extended: true }));
+
+// Pre-computed rainbow table for common passwords
+const RAINBOW_TABLE = {
+  "5f4dcc3b5aa765d61d8327deb882cf99": "password",
+  "e10adc3949ba59abbe56e057f20f883e": "123456",
+  "d8578edf8458ce06fbc5bb76a58c5ca4": "qwerty",
+  "25d55ad283aa400af464c76d713c07ad": "12345678",
+  "e99a18c428cb38d5f260853678922e03": "abc123",
+  "fcea920f7412b5da7be0cf42b8c93759": "1234567",
+  "25f9e794323b453885f5181f1b624d0b": "123456789",
+  "d077f244def8a70e5ea758bd8352fcd8": "letmein",
+  "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8": "password",
+  "0d107d09f5bbe40cade3de5c71e9e9b7": "admin",
+  "827ccb0eea8a706c4c34a16891f84e7b": "12345",
+  "e3afed0047b08059d0fada10f400c1e5": "monkey",
+};
+
+app.get("/weak-password", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 39a: Insecure Password Storage (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Register with a password to see how it's stored:</p>
+    <form method="post">
+      <label>Password: <input type="text" name="password" value="password" size="30"></label><br><br>
+      <button type="submit">Register</button>
+    </form>
+    <p class="info">Try common passwords like: password, 123456, admin, qwerty, letmein</p>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Vulnerable: MD5 hash with no salt</span>
+<span style="color:#9cdcfe;">const</span> hash = crypto.<span style="color:#dcdcaa;">createHash</span>(<span style="color:#ce9178;">"md5"</span>)
+  .<span style="color:#dcdcaa;">update</span>(password)
+  .<span style="color:#dcdcaa;">digest</span>(<span style="color:#ce9178;">"hex"</span>);
+
+<span style="color:#608b4e;">// Store hash in database</span>
+db.run(<span style="color:#ce9178;">"INSERT INTO users (password_hash) VALUES (?)"</span>, hash);</code></pre>
+
+    <details>
+      <summary><strong>Why is MD5 dangerous for passwords?</strong></summary>
+      <ul>
+        <li><strong>No salt:</strong> identical passwords produce identical hashes — enables rainbow table attacks</li>
+        <li><strong>Too fast:</strong> MD5 can compute billions of hashes/second on GPUs</li>
+        <li><strong>Broken:</strong> MD5 has known collision vulnerabilities</li>
+        <li><strong>Deterministic:</strong> same input always produces the same output without a random salt</li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/weak-password", (req, res) => {
+  const password = req.body.password || "";
+  const hash = crypto.createHash("md5").update(password).digest("hex");
+  const cracked = RAINBOW_TABLE[hash];
+
+  res.type("html").send(`
+    <h1>Lab 39a: Insecure Password Storage — Result (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/weak-password">Try again</a></p>
+
+    <h3>Stored Hash</h3>
+    <p>Algorithm: <code>MD5</code> (no salt)</p>
+    <pre ${PRE}>${escapeHtml(hash)}</pre>
+
+    <h3>Rainbow Table Lookup</h3>
+    ${cracked
+      ? `<p style="color:red;font-weight:bold;">&#9888; CRACKED! Hash reversed to: <code>${escapeHtml(cracked)}</code></p>
+         <p>A pre-computed rainbow table instantly recovered the password from the hash.
+            No brute force needed — the attacker simply looks up the hash in a table of
+            billions of pre-computed MD5 values.</p>`
+      : `<p style="color:orange;">Hash not found in this demo rainbow table, but a full table
+            (~15 GB for MD5) would cover far more passwords.</p>`}
+
+    <h3>Why This Is Dangerous</h3>
+    <table style="border-collapse:collapse;">
+      <tr><td style="padding:4px 12px;border:1px solid #ccc;">MD5 speed</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">~25 billion hashes/sec on GPU</td></tr>
+      <tr><td style="padding:4px 12px;border:1px solid #ccc;">8-char password space</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">~218 trillion combinations</td></tr>
+      <tr><td style="padding:4px 12px;border:1px solid #ccc;">Time to crack</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">~2.4 hours (brute force all 8-char)</td></tr>
+    </table>
+  `);
+});
+
+app.get("/weak-password-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 39b: Secure Password Storage (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Register with a password to see how it's stored securely:</p>
+    <form method="post">
+      <label>Password: <input type="text" name="password" value="password" size="30"></label><br><br>
+      <button type="submit">Register</button>
+    </form>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Fixed: scrypt with random 16-byte salt</span>
+<span style="color:#9cdcfe;">const</span> salt = crypto.<span style="color:#dcdcaa;">randomBytes</span>(<span style="color:#b5cea8;">16</span>).<span style="color:#dcdcaa;">toString</span>(<span style="color:#ce9178;">"hex"</span>);
+<span style="color:#9cdcfe;">const</span> hash = crypto.<span style="color:#dcdcaa;">scryptSync</span>(password, salt, <span style="color:#b5cea8;">64</span>).<span style="color:#dcdcaa;">toString</span>(<span style="color:#ce9178;">"hex"</span>);
+<span style="color:#9cdcfe;">const</span> stored = salt + <span style="color:#ce9178;">":"</span> + hash;
+
+<span style="color:#608b4e;">// Store in database — each user gets a unique salt</span>
+db.run(<span style="color:#ce9178;">"INSERT INTO users (password_hash) VALUES (?)"</span>, stored);</code></pre>
+
+    <details>
+      <summary><strong>Why is scrypt safe?</strong></summary>
+      <ul>
+        <li><strong>Random salt:</strong> identical passwords produce different hashes</li>
+        <li><strong>Memory-hard:</strong> requires significant RAM, making GPU attacks impractical</li>
+        <li><strong>Intentionally slow:</strong> ~100ms per hash vs nanoseconds for MD5</li>
+        <li><strong>Proven:</strong> recommended by OWASP alongside bcrypt and Argon2</li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/weak-password-fixed", (req, res) => {
+  const password = req.body.password || "";
+  const salt = crypto.randomBytes(16).toString("hex");
+
+  const start = process.hrtime.bigint();
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  const elapsed = Number(process.hrtime.bigint() - start) / 1e6; // ms
+
+  const stored = salt + ":" + hash;
+
+  // Hash it again to show different output
+  const salt2 = crypto.randomBytes(16).toString("hex");
+  const hash2 = crypto.scryptSync(password, salt2, 64).toString("hex");
+  const stored2 = salt2 + ":" + hash2;
+
+  res.type("html").send(`
+    <h1>Lab 39b: Secure Password Storage — Result (Fixed)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/weak-password-fixed">Try again</a></p>
+
+    <h3>Stored Hash</h3>
+    <p>Algorithm: <code>scrypt</code> (N=16384, r=8, p=1) with random 16-byte salt</p>
+    <pre ${PRE}>${escapeHtml(stored)}</pre>
+
+    <h3>Same Password, Different Salt</h3>
+    <p>Hashing the same password again produces a completely different output:</p>
+    <pre ${PRE}>${escapeHtml(stored2)}</pre>
+
+    <p style="color:green;font-weight:bold;">&#10004; Rainbow tables are useless — every hash is unique even for identical passwords.</p>
+
+    <h3>Performance Comparison</h3>
+    <table style="border-collapse:collapse;">
+      <tr><th style="padding:4px 12px;border:1px solid #ccc;">Algorithm</th>
+          <th style="padding:4px 12px;border:1px solid #ccc;">Time per hash</th>
+          <th style="padding:4px 12px;border:1px solid #ccc;">GPU attacks?</th></tr>
+      <tr><td style="padding:4px 12px;border:1px solid #ccc;">MD5</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">~0.00004 ms</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">Trivial (25B/sec)</td></tr>
+      <tr><td style="padding:4px 12px;border:1px solid #ccc;color:green;font-weight:bold;">scrypt</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;color:green;font-weight:bold;">${elapsed.toFixed(1)} ms</td>
+          <td style="padding:4px 12px;border:1px solid #ccc;color:green;">Memory-hard, impractical</td></tr>
+    </table>
+  `);
+});
+
+/* ========================================================================
+   LAB 40 — Host Header Injection (CWE-644)
+   ======================================================================== */
+app.use("/host-header", express.urlencoded({ extended: true }));
+app.use("/host-header-fixed", express.urlencoded({ extended: true }));
+
+app.get("/host-header", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 40a: Host Header Injection (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Simulate a "Forgot Password" request for a demo user:</p>
+    <form method="post">
+      <label>Email: <input type="text" name="email" value="victim@example.com" size="30"></label><br><br>
+      <button type="submit">Send Reset Link</button>
+    </form>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Vulnerable: reset link built from Host header</span>
+<span style="color:#9cdcfe;">const</span> host = req.headers.host;
+<span style="color:#9cdcfe;">const</span> token = crypto.<span style="color:#dcdcaa;">randomBytes</span>(<span style="color:#b5cea8;">32</span>).<span style="color:#dcdcaa;">toString</span>(<span style="color:#ce9178;">"hex"</span>);
+<span style="color:#9cdcfe;">const</span> resetLink = <span style="color:#ce9178;">\`https://\${host}/reset?token=\${token}\`</span>;
+
+<span style="color:#608b4e;">// Email sent to victim contains attacker-controlled URL</span>
+sendEmail(user.email, <span style="color:#ce9178;">\`Reset: \${resetLink}\`</span>);</code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker sends forgot-password POST with <code>Host: evil.com</code></li>
+      <li>Server builds reset link as <code>https://evil.com/reset?token=abc123</code></li>
+      <li>Victim receives email with the poisoned link</li>
+      <li>Victim clicks the link — token is sent to attacker's server</li>
+      <li>Attacker uses the token to reset the victim's password</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <p>The <code>Host</code> header is entirely controlled by the client. In shared hosting,
+         reverse proxy configurations, or when a CDN forwards requests, the Host header may be
+         trivially spoofable. Using it to build security-sensitive URLs (password resets,
+         email verification, OAuth callbacks) enables phishing and token theft.</p>
+    </details>
+  `);
+});
+
+app.post("/host-header", (req, res) => {
+  const email = req.body.email || "victim@example.com";
+  const host = req.headers.host;
+  const token = crypto.randomBytes(32).toString("hex");
+  const resetLink = `https://${host}/reset?token=${token}`;
+
+  res.type("html").send(`
+    <h1>Lab 40a: Host Header Injection — Result (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/host-header">Try again</a></p>
+
+    <h3>Generated Reset Email</h3>
+    <div style="background:#f9f9f9;border:1px solid #ddd;padding:1rem;border-radius:6px;font-family:monospace;">
+      <p><strong>To:</strong> ${escapeHtml(email)}</p>
+      <p><strong>Subject:</strong> Password Reset Request</p>
+      <hr>
+      <p>Click the link below to reset your password:</p>
+      <p><a href="#">${escapeHtml(resetLink)}</a></p>
+    </div>
+
+    <p style="color:red;font-weight:bold;">&#9888; The reset link uses the Host header: <code>${escapeHtml(host)}</code></p>
+    <p>If an attacker sends this request with <code>Host: evil.com</code>, the victim receives
+       a reset link pointing to the attacker's server. When the victim clicks it,
+       the token is leaked to the attacker.</p>
+
+    <h3>Try It (curl)</h3>
+    <pre ${PRE}>curl -X POST http://localhost:3000/host-header \\
+  -H "Host: evil.com" \\
+  -d "email=victim@example.com"</pre>
+  `);
+});
+
+app.get("/host-header-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 40b: Host Header Injection (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Simulate a "Forgot Password" request for a demo user:</p>
+    <form method="post">
+      <label>Email: <input type="text" name="email" value="victim@example.com" size="30"></label><br><br>
+      <button type="submit">Send Reset Link</button>
+    </form>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Fixed: use a hardcoded/allowlisted origin</span>
+<span style="color:#9cdcfe;">const</span> ALLOWED_ORIGINS = [<span style="color:#ce9178;">"myapp.example.com"</span>];
+<span style="color:#9cdcfe;">const</span> origin = ALLOWED_ORIGINS[<span style="color:#b5cea8;">0</span>]; <span style="color:#608b4e;">// or from config/env</span>
+<span style="color:#9cdcfe;">const</span> token = crypto.<span style="color:#dcdcaa;">randomBytes</span>(<span style="color:#b5cea8;">32</span>).<span style="color:#dcdcaa;">toString</span>(<span style="color:#ce9178;">"hex"</span>);
+<span style="color:#9cdcfe;">const</span> resetLink = <span style="color:#ce9178;">\`https://\${origin}/reset?token=\${token}\`</span>;
+
+<span style="color:#608b4e;">// Host header is ignored — link always points to trusted domain</span>
+sendEmail(user.email, <span style="color:#ce9178;">\`Reset: \${resetLink}\`</span>);</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <p>The fix never reads <code>req.headers.host</code> for building URLs. Instead, the
+         application origin is hardcoded in configuration or loaded from an environment variable.
+         Even if an attacker spoofs the Host header, the reset link always points to the
+         legitimate domain.</p>
+      <p>Additional defenses: validate the Host header against an allowlist in middleware,
+         or use a reverse proxy that strips/overwrites the Host header.</p>
+    </details>
+  `);
+});
+
+app.post("/host-header-fixed", (req, res) => {
+  const email = req.body.email || "victim@example.com";
+  const ALLOWED_ORIGINS = ["myapp.example.com"];
+  const origin = ALLOWED_ORIGINS[0];
+  const receivedHost = req.headers.host;
+  const token = crypto.randomBytes(32).toString("hex");
+  const resetLink = `https://${origin}/reset?token=${token}`;
+
+  res.type("html").send(`
+    <h1>Lab 40b: Host Header Injection — Result (Fixed)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/host-header-fixed">Try again</a></p>
+
+    <h3>Generated Reset Email</h3>
+    <div style="background:#f0fff0;border:1px solid #aca;padding:1rem;border-radius:6px;font-family:monospace;">
+      <p><strong>To:</strong> ${escapeHtml(email)}</p>
+      <p><strong>Subject:</strong> Password Reset Request</p>
+      <hr>
+      <p>Click the link below to reset your password:</p>
+      <p><a href="#">${escapeHtml(resetLink)}</a></p>
+    </div>
+
+    <p style="color:green;font-weight:bold;">&#10004; Reset link uses allowlisted origin: <code>${escapeHtml(origin)}</code></p>
+    <p>Incoming Host header was: <code>${escapeHtml(receivedHost)}</code> — but it was <strong>ignored</strong>.</p>
+    <p>Even with <code>Host: evil.com</code>, the link always points to <code>${escapeHtml(origin)}</code>.</p>
+
+    <h3>Try It (curl)</h3>
+    <pre ${PRE}>curl -X POST http://localhost:3000/host-header-fixed \\
+  -H "Host: evil.com" \\
+  -d "email=victim@example.com"
+
+<span style="color:#608b4e;"># Reset link will still point to myapp.example.com, not evil.com</span></pre>
   `);
 });
 

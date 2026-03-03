@@ -1,7 +1,7 @@
 {
   "name": "web-vuln-by-example",
   "version": "1.0.0",
-  "description": "37 hands-on web security labs — vulnerable + fixed side-by-side with source code explanations",
+  "description": "40 hands-on web security labs — vulnerable + fixed side-by-side with source code explanations",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
