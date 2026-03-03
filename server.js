@@ -418,6 +418,18 @@ app.get("/", (req, res) => {
         /race-condition-fixed — mutex serialization (safe)
       </a>
     </section>
+
+    <h2 style="color:#666;">Cryptography &amp; Input Handling</h2>
+
+    <section>
+      <h2>Lab 43 — Unrestricted File Upload (CWE-434)</h2>
+      <a class="vuln" href="/file-upload">
+        /file-upload — no validation on filename or content (vulnerable)
+      </a>
+      <a class="safe" href="/file-upload-fixed">
+        /file-upload-fixed — allowlist extension, sanitize name, check size (safe)
+      </a>
+    </section>
   `);
 });
 
@@ -5069,6 +5081,296 @@ app.post("/xxe-fixed", (req, res) => {
     ${parsed ? `<pre ${PRE}>${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>` : ""}
     ${error ? `<pre style="color:red;">${escapeHtml(error)}</pre>` : ""}
   `);
+});
+
+/* ========================================================================
+   LAB 43 — Unrestricted File Upload (CWE-434)
+   ======================================================================== */
+
+// Simulated file storage (in-memory, no actual disk writes)
+const uploadedFiles = { vuln: [], fixed: [] };
+
+// Parse multipart form data manually (no multer dependency needed)
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const contentType = req.headers["content-type"] || "";
+    const boundaryMatch = contentType.match(/boundary=(.+)/);
+    if (!boundaryMatch) return reject(new Error("No boundary found"));
+
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const boundary = "--" + boundaryMatch[1];
+      const parts = body.toString("binary").split(boundary).slice(1, -1);
+      const files = [];
+
+      for (const part of parts) {
+        const headerEnd = part.indexOf("\r\n\r\n");
+        if (headerEnd === -1) continue;
+        const headers = part.substring(0, headerEnd);
+        const content = part.substring(headerEnd + 4).replace(/\r\n$/, "");
+        const filenameMatch = headers.match(/filename="([^"]+)"/);
+        const nameMatch = headers.match(/name="([^"]+)"/);
+        if (filenameMatch) {
+          files.push({
+            fieldname: nameMatch ? nameMatch[1] : "file",
+            filename: filenameMatch[1],
+            content,
+            size: Buffer.byteLength(content, "binary"),
+          });
+        }
+      }
+      resolve(files);
+    });
+    req.on("error", reject);
+  });
+}
+
+app.get("/file-upload", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 43a: Unrestricted File Upload (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Upload a file — the server accepts anything without validation:</p>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="file"><br><br>
+      <button type="submit">Upload</button>
+    </form>
+    <p class="info">Try uploading: <code>shell.php</code>, <code>exploit.html</code>, <code>payload.exe</code>,
+       or a file named <code>../../../etc/cron.d/backdoor</code></p>
+
+    ${uploadedFiles.vuln.length > 0 ? `
+      <h3>Uploaded Files</h3>
+      <table style="border-collapse:collapse;">
+        <tr><th style="padding:4px 12px;border:1px solid #ccc;">Filename</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Size</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Risk</th></tr>
+        ${uploadedFiles.vuln.map((f) => {
+          const ext = path.extname(f.filename).toLowerCase();
+          const dangerous = [".php", ".jsp", ".exe", ".sh", ".bat", ".html", ".svg", ".js"].includes(ext);
+          const traversal = f.filename.includes("..");
+          return `<tr>
+            <td style="padding:4px 12px;border:1px solid #ccc;"><code>${escapeHtml(f.filename)}</code></td>
+            <td style="padding:4px 12px;border:1px solid #ccc;">${f.size} bytes</td>
+            <td style="padding:4px 12px;border:1px solid #ccc;color:${dangerous || traversal ? "red" : "green"};">
+              ${traversal ? "&#9888; PATH TRAVERSAL" : dangerous ? "&#9888; Executable/active content" : "Low risk"}
+            </td></tr>`;
+        }).join("")}
+      </table>
+    ` : ""}
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Vulnerable: no validation at all</span>
+<span style="color:#9cdcfe;">const</span> filename = req.file.originalname; <span style="color:#608b4e;">// &#9888; user-controlled!</span>
+<span style="color:#9cdcfe;">const</span> savePath = path.join(uploadDir, filename);
+fs.writeFileSync(savePath, req.file.buffer);
+
+<span style="color:#608b4e;">// Problems:</span>
+<span style="color:#608b4e;">// 1. No extension check — .php, .jsp, .exe all accepted</span>
+<span style="color:#608b4e;">// 2. No content-type validation — MIME type is user-controlled</span>
+<span style="color:#608b4e;">// 3. No size limit — DoS via large uploads</span>
+<span style="color:#608b4e;">// 4. Path traversal — filename "../../etc/cron.d/job" escapes upload dir</span>
+<span style="color:#608b4e;">// 5. No rename — predictable filenames enable direct access</span></code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker uploads <code>webshell.php</code> with PHP code as content</li>
+      <li>Server saves it to <code>/uploads/webshell.php</code></li>
+      <li>Attacker visits <code>https://target.com/uploads/webshell.php</code></li>
+      <li>Web server executes the PHP — attacker has remote code execution</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <ul>
+        <li><strong>Remote Code Execution:</strong> upload server-side scripts (.php, .jsp, .aspx)</li>
+        <li><strong>Stored XSS:</strong> upload .html or .svg with JavaScript</li>
+        <li><strong>Path Traversal:</strong> filename like <code>../../config.js</code> overwrites server files</li>
+        <li><strong>DoS:</strong> upload gigabyte-sized files without size limits</li>
+        <li><strong>Malware distribution:</strong> serve malicious .exe from trusted domain</li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/file-upload", async (req, res) => {
+  try {
+    const files = await parseMultipart(req);
+    if (files.length === 0) {
+      return res.type("html").send(`
+        <h1>Lab 43a: File Upload — No file received</h1>
+        <p><a href="/file-upload">Try again</a></p>
+      `);
+    }
+
+    const file = files[0];
+    // Vulnerable: store with original filename, no validation
+    uploadedFiles.vuln.push({ filename: file.filename, size: file.size });
+
+    const ext = path.extname(file.filename).toLowerCase();
+    const dangerous = [".php", ".jsp", ".exe", ".sh", ".bat", ".html", ".svg", ".js"].includes(ext);
+    const traversal = file.filename.includes("..");
+
+    res.type("html").send(`
+      <h1>Lab 43a: File Upload — Result (Vulnerable)</h1>
+      <p><a href="/">Back to labs</a> | <a href="/file-upload">Upload another</a></p>
+
+      <h3>Upload Accepted</h3>
+      <p>Filename: <code>${escapeHtml(file.filename)}</code></p>
+      <p>Size: ${file.size} bytes</p>
+      <p>Saved to: <code>/uploads/${escapeHtml(file.filename)}</code></p>
+
+      ${traversal
+        ? `<p style="color:red;font-weight:bold;">&#9888; PATH TRAVERSAL! Filename contains ".." — file could be written outside the upload directory.</p>
+           <p>Resolved path: <code>${escapeHtml(path.join("/uploads", file.filename))}</code></p>`
+        : ""}
+
+      ${dangerous
+        ? `<p style="color:red;font-weight:bold;">&#9888; DANGEROUS EXTENSION! <code>${escapeHtml(ext)}</code> files can execute code or scripts on the server.</p>`
+        : ""}
+
+      ${!dangerous && !traversal
+        ? '<p style="color:orange;">File accepted without any validation. Even "safe" extensions can be dangerous with MIME sniffing.</p>'
+        : ""}
+    `);
+  } catch (e) {
+    res.type("html").send(`
+      <h1>Lab 43a: File Upload — Error</h1>
+      <p><a href="/file-upload">Try again</a></p>
+      <p style="color:red;">${escapeHtml(e.message)}</p>
+    `);
+  }
+});
+
+app.get("/file-upload-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 43b: Restricted File Upload (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Upload a file — only safe extensions, sanitized filename, and size limits:</p>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="file"><br><br>
+      <button type="submit">Upload</button>
+    </form>
+    <p class="info">Allowed: .png, .jpg, .jpeg, .gif, .pdf, .txt (max 1 MB)</p>
+
+    ${uploadedFiles.fixed.length > 0 ? `
+      <h3>Uploaded Files</h3>
+      <table style="border-collapse:collapse;">
+        <tr><th style="padding:4px 12px;border:1px solid #ccc;">Original Name</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Saved As</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Size</th></tr>
+        ${uploadedFiles.fixed.map((f) => `<tr>
+          <td style="padding:4px 12px;border:1px solid #ccc;"><code>${escapeHtml(f.original)}</code></td>
+          <td style="padding:4px 12px;border:1px solid #ccc;"><code>${escapeHtml(f.saved)}</code></td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">${f.size} bytes</td>
+        </tr>`).join("")}
+      </table>
+    ` : ""}
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#9cdcfe;">const</span> ALLOWED_EXT = <span style="color:#9cdcfe;">new</span> <span style="color:#4ec9b0;">Set</span>([<span style="color:#ce9178;">".png"</span>, <span style="color:#ce9178;">".jpg"</span>, <span style="color:#ce9178;">".jpeg"</span>, <span style="color:#ce9178;">".gif"</span>, <span style="color:#ce9178;">".pdf"</span>, <span style="color:#ce9178;">".txt"</span>]);
+<span style="color:#9cdcfe;">const</span> MAX_SIZE = <span style="color:#b5cea8;">1024</span> * <span style="color:#b5cea8;">1024</span>; <span style="color:#608b4e;">// 1 MB</span>
+
+<span style="color:#608b4e;">// 1. Check file size</span>
+<span style="color:#c586c0;">if</span> (file.size > MAX_SIZE) <span style="color:#c586c0;">return</span> reject(<span style="color:#ce9178;">"Too large"</span>);
+
+<span style="color:#608b4e;">// 2. Extract and validate extension</span>
+<span style="color:#9cdcfe;">const</span> ext = path.extname(file.originalname).toLowerCase();
+<span style="color:#c586c0;">if</span> (!ALLOWED_EXT.has(ext)) <span style="color:#c586c0;">return</span> reject(<span style="color:#ce9178;">"Extension not allowed"</span>);
+
+<span style="color:#608b4e;">// 3. Strip path components (prevent traversal)</span>
+<span style="color:#9cdcfe;">const</span> baseName = path.basename(file.originalname);
+
+<span style="color:#608b4e;">// 4. Generate random filename (prevent overwrites + direct access)</span>
+<span style="color:#9cdcfe;">const</span> safeName = crypto.randomUUID() + ext;
+<span style="color:#9cdcfe;">const</span> savePath = path.join(uploadDir, safeName);</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <ul>
+        <li><strong>Extension allowlist:</strong> only known-safe types accepted</li>
+        <li><strong>Size limit:</strong> prevents DoS via oversized uploads</li>
+        <li><strong>path.basename():</strong> strips <code>../</code> sequences, preventing traversal</li>
+        <li><strong>Random filename:</strong> prevents predictable URLs and file overwrites</li>
+        <li>Additional best practices: validate MIME via magic bytes, store outside web root,
+            serve via a handler that sets <code>Content-Disposition: attachment</code></li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/file-upload-fixed", async (req, res) => {
+  const ALLOWED_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".pdf", ".txt"]);
+  const MAX_SIZE = 1024 * 1024; // 1 MB
+
+  try {
+    const files = await parseMultipart(req);
+    if (files.length === 0) {
+      return res.type("html").send(`
+        <h1>Lab 43b: File Upload — No file received</h1>
+        <p><a href="/file-upload-fixed">Try again</a></p>
+      `);
+    }
+
+    const file = files[0];
+    const errors = [];
+
+    // 1. Size check
+    if (file.size > MAX_SIZE) {
+      errors.push(`File too large: ${file.size} bytes (max ${MAX_SIZE})`);
+    }
+
+    // 2. Extension allowlist
+    const ext = path.extname(file.filename).toLowerCase();
+    if (!ALLOWED_EXT.has(ext)) {
+      errors.push(`Extension "${ext || "(none)"}" not allowed. Allowed: ${[...ALLOWED_EXT].join(", ")}`);
+    }
+
+    // 3. Check for double extensions (e.g. shell.php.jpg — still suspicious)
+    const parts = file.filename.split(".");
+    const suspiciousDoubleExt = parts.length > 2 &&
+      [".php", ".jsp", ".exe", ".sh", ".bat", ".html", ".js"].includes("." + parts[parts.length - 2].toLowerCase());
+
+    if (errors.length > 0) {
+      return res.type("html").send(`
+        <h1>Lab 43b: File Upload — Rejected (Fixed)</h1>
+        <p><a href="/">Back to labs</a> | <a href="/file-upload-fixed">Try again</a></p>
+
+        <p style="color:green;font-weight:bold;">&#10004; Upload rejected:</p>
+        <ul>${errors.map((e) => `<li style="color:green;">${escapeHtml(e)}</li>`).join("")}</ul>
+        <p>Original filename: <code>${escapeHtml(file.filename)}</code></p>
+      `);
+    }
+
+    // 4. Sanitize: strip path, generate random name
+    const safeName = crypto.randomUUID() + ext;
+    uploadedFiles.fixed.push({ original: file.filename, saved: safeName, size: file.size });
+
+    res.type("html").send(`
+      <h1>Lab 43b: File Upload — Accepted (Fixed)</h1>
+      <p><a href="/">Back to labs</a> | <a href="/file-upload-fixed">Upload another</a></p>
+
+      <h3>Upload Accepted</h3>
+      <p>Original: <code>${escapeHtml(file.filename)}</code></p>
+      <p>Saved as: <code>${escapeHtml(safeName)}</code></p>
+      <p>Size: ${file.size} bytes</p>
+
+      <p style="color:green;font-weight:bold;">&#10004; File validated and renamed to prevent direct execution.</p>
+      ${suspiciousDoubleExt
+        ? `<p style="color:orange;">&#9888; Warning: double extension detected — may be an evasion attempt, but the final extension is safe.</p>`
+        : ""}
+    `);
+  } catch (e) {
+    res.type("html").send(`
+      <h1>Lab 43b: File Upload — Error</h1>
+      <p><a href="/file-upload-fixed">Try again</a></p>
+      <p style="color:red;">${escapeHtml(e.message)}</p>
+    `);
+  }
 });
 
 /* ========================================================================
