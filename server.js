@@ -18,468 +18,481 @@ function escapeHtml(str) {
 }
 
 /* ========================================================================
+   NAVIGATION DATA — sidebar structure
+   ======================================================================== */
+const LAB_NAV = [
+  { category: "XSS & Client-Side", labs: [
+    { num: 1, title: "DOM XSS", path: "/dom-xss" },
+    { num: 2, title: "Open Redirect", path: "/vuln-redirect" },
+    { num: 3, title: "CSP", path: "/csp-none" },
+    { num: 4, title: "EJS Template Engine", path: "/ejs-escaped" },
+    { num: 5, title: "Stored XSS", path: "/stored-xss" },
+    { num: 6, title: "Reflected XSS", path: "/reflected" },
+    { num: 7, title: "Cookie Theft + HttpOnly", path: "/cookie-theft" },
+    { num: 8, title: "Postmessage XSS", path: "/postmessage-xss" },
+    { num: 9, title: "JSON Injection", path: "/json-injection" },
+    { num: 10, title: "URL Parsing Confusion", path: "/url-confusion" },
+    { num: 11, title: "DOMPurify Sanitizer", path: "/dompurify-demo" },
+    { num: 12, title: "DOM Clobbering", path: "/dom-clobbering" },
+    { num: 13, title: "Mutation XSS", path: "/mxss" },
+    { num: 14, title: "Prototype Pollution \u2192 XSS", path: "/proto-pollution-xss" },
+    { num: 15, title: "Dangling Markup", path: "/dangling-markup" },
+    { num: 16, title: "Trusted Types", path: "/trusted-types" },
+    { num: 17, title: "SRI", path: "/sri-demo" },
+    { num: 18, title: "Sandbox Iframes", path: "/sandbox-iframe" },
+    { num: 19, title: "Security Headers Audit", path: "/headers-audit" },
+  ]},
+  { category: "Injection Attacks", labs: [
+    { num: 20, title: "SQL Injection", cwe: "89", path: "/sqli" },
+    { num: 21, title: "Command Injection", cwe: "78", path: "/cmdi" },
+    { num: 22, title: "SSTI", cwe: "1336", path: "/ssti" },
+  ]},
+  { category: "Broken Access & Trust", labs: [
+    { num: 23, title: "CSRF", cwe: "352", path: "/csrf" },
+    { num: 24, title: "IDOR", cwe: "639", path: "/idor" },
+    { num: 25, title: "Mass Assignment", cwe: "915", path: "/mass-assign" },
+    { num: 26, title: "JWT Weaknesses", cwe: "347", path: "/jwt-demo" },
+  ]},
+  { category: "Server-Side", labs: [
+    { num: 27, title: "Path Traversal", cwe: "22", path: "/path-traversal" },
+    { num: 28, title: "SSRF", cwe: "918", path: "/ssrf" },
+    { num: 29, title: "XXE", cwe: "611", path: "/xxe" },
+  ]},
+  { category: "HTTP & Browser", labs: [
+    { num: 30, title: "CORS Misconfiguration", cwe: "942", path: "/cors-misconfig" },
+    { num: 31, title: "Clickjacking", cwe: "1021", path: "/clickjack" },
+    { num: 32, title: "CRLF Injection", cwe: "113", path: "/crlf" },
+  ]},
+  { category: "Application Logic", labs: [
+    { num: 33, title: "Deserialization", cwe: "502", path: "/deserialize" },
+    { num: 34, title: "ReDoS", cwe: "1333", path: "/redos" },
+    { num: 35, title: "Insecure Randomness", cwe: "330", path: "/weak-random" },
+    { num: 36, title: "Error Leaks", cwe: "200", path: "/error-leak" },
+    { num: 37, title: "Race Conditions", cwe: "362", path: "/race-condition" },
+  ]},
+  { category: "Crypto & Input Handling", labs: [
+    { num: 38, title: "HTTP Parameter Pollution", cwe: "235", path: "/hpp" },
+    { num: 39, title: "Insecure Password Storage", cwe: "916", path: "/weak-password" },
+    { num: 40, title: "Host Header Injection", cwe: "644", path: "/host-header" },
+    { num: 41, title: "Prototype Pollution", cwe: "1321", path: "/proto-pollution" },
+    { num: 42, title: "Timing Attack", cwe: "208", path: "/timing-attack" },
+    { num: 43, title: "File Upload", cwe: "434", path: "/file-upload" },
+  ]},
+];
+
+// Build a flat list of all lab paths for matching
+const ALL_LAB_PATHS = [];
+LAB_NAV.forEach(cat => cat.labs.forEach(lab => ALL_LAB_PATHS.push(lab)));
+
+function findCurrentLab(reqPath) {
+  const clean = reqPath.split("?")[0];
+  // Direct match on primary path
+  let match = ALL_LAB_PATHS.find(l => clean === l.path);
+  if (match) return match;
+  // Match fixed variants (e.g. /sqli-fixed -> lab 20)
+  const base = clean.replace(/-fixed$/, "").replace(/-none$/, "").replace(/-strict$/, "")
+    .replace(/-nonce$/, "").replace(/-report-only$/, "").replace(/-unsafe-inline$/, "")
+    .replace(/-raw$/, "").replace(/-escaped$/, "").replace(/-with-csp$/, "")
+    .replace(/-tampered$/, "").replace(/-attacker$/, "");
+  match = ALL_LAB_PATHS.find(l => base === l.path);
+  return match || null;
+}
+
+function renderSidebar(currentPath) {
+  const current = findCurrentLab(currentPath);
+  return LAB_NAV.map(cat => `
+    <div class="nav-category">
+      <div class="nav-category-title">${cat.category}</div>
+      ${cat.labs.map(lab => {
+        const active = current && current.num === lab.num ? ' active' : '';
+        return `<a class="nav-lab${active}" href="${lab.path}">
+          <span class="nav-num">${lab.num}</span> ${lab.title}
+          ${lab.cwe ? `<span class="nav-cwe">CWE-${lab.cwe}</span>` : ''}
+        </a>`;
+      }).join('')}
+    </div>
+  `).join('');
+}
+
+function getPrevNext(currentPath) {
+  const current = findCurrentLab(currentPath);
+  if (!current) return { prev: null, next: null };
+  const flat = ALL_LAB_PATHS;
+  const idx = flat.findIndex(l => l.num === current.num);
+  return {
+    prev: idx > 0 ? flat[idx - 1] : null,
+    next: idx < flat.length - 1 ? flat[idx + 1] : null,
+  };
+}
+
+const SHARED_CSS = `
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    margin: 0; padding: 0;
+    background: #fff; color: #1a1a2e;
+    display: flex; min-height: 100vh;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 280px; min-width: 280px;
+    background: #f8f9fa;
+    border-right: 1px solid #e1e4e8;
+    overflow-y: auto;
+    position: sticky; top: 0;
+    height: 100vh;
+    padding: 0;
+    font-size: 0.875rem;
+  }
+  .sidebar-header {
+    padding: 1.25rem 1rem;
+    border-bottom: 1px solid #e1e4e8;
+    background: #fff;
+  }
+  .sidebar-header h1 {
+    margin: 0; font-size: 1.1rem; font-weight: 700;
+    color: #1a1a2e;
+  }
+  .sidebar-header p {
+    margin: 0.25rem 0 0; font-size: 0.75rem; color: #666;
+  }
+  .nav-category { padding: 0.5rem 0; }
+  .nav-category-title {
+    padding: 0.5rem 1rem 0.25rem;
+    font-size: 0.7rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: #8b949e;
+  }
+  .nav-lab {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.35rem 1rem;
+    color: #444; text-decoration: none;
+    border-left: 3px solid transparent;
+    transition: all 0.15s;
+    font-size: 0.82rem; line-height: 1.3;
+  }
+  .nav-lab:hover { background: #e8eaed; color: #1a1a2e; }
+  .nav-lab.active {
+    background: #e3edf7; color: #0550ae;
+    border-left-color: #0550ae; font-weight: 600;
+  }
+  .nav-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.5rem; height: 1.3rem;
+    background: #e1e4e8; border-radius: 3px;
+    font-size: 0.7rem; font-weight: 600; color: #666;
+    flex-shrink: 0;
+  }
+  .nav-lab.active .nav-num { background: #0550ae; color: #fff; }
+  .nav-cwe {
+    margin-left: auto; font-size: 0.65rem;
+    color: #8b949e; font-family: monospace;
+  }
+
+  /* Main content */
+  .main-content {
+    flex: 1; min-width: 0;
+    padding: 2rem 2.5rem;
+    max-width: 960px;
+  }
+
+  /* Hamburger for mobile */
+  .hamburger {
+    display: none; position: fixed; top: 0.75rem; left: 0.75rem;
+    z-index: 1000; background: #fff; border: 1px solid #e1e4e8;
+    border-radius: 6px; padding: 0.5rem 0.6rem;
+    cursor: pointer; font-size: 1.2rem; line-height: 1;
+  }
+
+  /* Prev/Next navigation */
+  .lab-nav {
+    display: flex; justify-content: space-between;
+    margin-top: 2rem; padding-top: 1.5rem;
+    border-top: 1px solid #e1e4e8;
+  }
+  .lab-nav a {
+    color: #0550ae; text-decoration: none; font-size: 0.9rem;
+  }
+  .lab-nav a:hover { text-decoration: underline; }
+
+  /* Legacy styles (preserve existing lab content) */
+  .main-content section { margin: 1.5rem 0; }
+  .main-content a.vuln { color: #c00; }
+  .main-content a.safe { color: #070; }
+  .main-content .info { color: #555; font-size: 0.9em; }
+  code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  details[open] summary { margin-bottom: 0.5rem; }
+  pre { overflow-x: auto; }
+
+  /* Index page cards */
+  .lab-grid { display: grid; gap: 0.75rem; }
+  .lab-card {
+    display: block; padding: 1rem 1.25rem;
+    border: 1px solid #e1e4e8; border-radius: 8px;
+    text-decoration: none; color: inherit;
+    transition: all 0.15s; border-left: 4px solid #e1e4e8;
+  }
+  .lab-card:hover {
+    border-color: #d0d7de; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    transform: translateY(-1px);
+  }
+  .lab-card h3 { margin: 0 0 0.25rem; font-size: 0.95rem; color: #1a1a2e; }
+  .lab-card .card-meta {
+    font-size: 0.75rem; color: #666;
+    display: flex; gap: 0.75rem; align-items: center;
+  }
+  .lab-card .card-meta .cwe { font-family: monospace; color: #8b949e; }
+  .lab-card .card-links { margin-top: 0.5rem; font-size: 0.8rem; }
+  .lab-card .card-links a { margin-right: 1rem; }
+
+  /* Category colors for card borders */
+  .cat-xss { border-left-color: #cf222e; }
+  .cat-injection { border-left-color: #e16f24; }
+  .cat-access { border-left-color: #8250df; }
+  .cat-server { border-left-color: #0550ae; }
+  .cat-http { border-left-color: #1a7f37; }
+  .cat-logic { border-left-color: #bf8700; }
+  .cat-crypto { border-left-color: #0969da; }
+
+  /* Split pane for lab pages */
+  .split-pane {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 1rem; margin: 1rem 0;
+  }
+  .pane {
+    border: 1px solid #e1e4e8; border-radius: 8px;
+    overflow: hidden;
+  }
+  .pane-header {
+    padding: 0.5rem 1rem; font-weight: 600; font-size: 0.85rem;
+    border-bottom: 1px solid #e1e4e8;
+  }
+  .pane-vuln .pane-header { background: #fff5f5; color: #cf222e; border-left: 3px solid #cf222e; }
+  .pane-safe .pane-header { background: #f0fff4; color: #1a7f37; border-left: 3px solid #1a7f37; }
+  .pane-body { padding: 1rem; }
+  .pane-body pre { margin: 0; }
+
+  /* Breadcrumb */
+  .breadcrumb {
+    font-size: 0.8rem; color: #666; margin-bottom: 1rem;
+  }
+  .breadcrumb a { color: #0550ae; text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+
+  /* Dark mode toggle */
+  .theme-toggle {
+    background: none; border: 1px solid #d0d7de; border-radius: 6px;
+    padding: 0.3rem 0.5rem; cursor: pointer; font-size: 1rem;
+    line-height: 1; color: inherit;
+  }
+  .theme-toggle:hover { background: #e8eaed; }
+
+  /* Dark mode */
+  [data-theme="dark"] {
+    color-scheme: dark;
+  }
+  [data-theme="dark"] body { background: #0d1117; color: #c9d1d9; }
+  [data-theme="dark"] .sidebar { background: #161b22; border-right-color: #30363d; }
+  [data-theme="dark"] .sidebar-header { background: #0d1117; border-bottom-color: #30363d; }
+  [data-theme="dark"] .sidebar-header h1 { color: #c9d1d9; }
+  [data-theme="dark"] .nav-category-title { color: #8b949e; }
+  [data-theme="dark"] .nav-lab { color: #c9d1d9; }
+  [data-theme="dark"] .nav-lab:hover { background: #21262d; color: #f0f6fc; }
+  [data-theme="dark"] .nav-lab.active { background: #1f3a5f; color: #58a6ff; border-left-color: #58a6ff; }
+  [data-theme="dark"] .nav-num { background: #30363d; color: #8b949e; }
+  [data-theme="dark"] .nav-lab.active .nav-num { background: #58a6ff; color: #0d1117; }
+  [data-theme="dark"] .main-content { color: #c9d1d9; }
+  [data-theme="dark"] .breadcrumb a { color: #58a6ff; }
+  [data-theme="dark"] .lab-nav a { color: #58a6ff; }
+  [data-theme="dark"] code { background: #21262d; color: #c9d1d9; }
+  [data-theme="dark"] .lab-card { border-color: #30363d; background: #161b22; }
+  [data-theme="dark"] .lab-card:hover { border-color: #484f58; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+  [data-theme="dark"] .lab-card h3 { color: #c9d1d9; }
+  [data-theme="dark"] .lab-card .card-meta { color: #8b949e; }
+  [data-theme="dark"] .pane { border-color: #30363d; }
+  [data-theme="dark"] .pane-header { border-bottom-color: #30363d; }
+  [data-theme="dark"] .pane-vuln .pane-header { background: #2d1215; color: #f85149; }
+  [data-theme="dark"] .pane-safe .pane-header { background: #0f2d16; color: #3fb950; }
+  [data-theme="dark"] .main-content a.vuln { color: #f85149; }
+  [data-theme="dark"] .main-content a.safe { color: #3fb950; }
+  [data-theme="dark"] .main-content .info { color: #8b949e; }
+  [data-theme="dark"] .hamburger { background: #161b22; border-color: #30363d; color: #c9d1d9; }
+  [data-theme="dark"] .theme-toggle { border-color: #30363d; }
+  [data-theme="dark"] .theme-toggle:hover { background: #21262d; }
+  [data-theme="dark"] details summary { color: #c9d1d9; }
+  [data-theme="dark"] hr { border-color: #30363d; }
+  [data-theme="dark"] table { color: #c9d1d9; }
+  [data-theme="dark"] td, [data-theme="dark"] th { border-color: #30363d !important; }
+  [data-theme="dark"] .lab-nav { border-top-color: #30363d; }
+  [data-theme="dark"] input, [data-theme="dark"] textarea, [data-theme="dark"] select {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+  }
+  [data-theme="dark"] button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .sidebar {
+      position: fixed; left: -300px; top: 0;
+      z-index: 999; transition: left 0.3s;
+      box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+    }
+    .sidebar.open { left: 0; }
+    .hamburger { display: block; }
+    .main-content { padding: 1rem; padding-top: 3.5rem; }
+    .split-pane { grid-template-columns: 1fr; }
+  }
+</style>`;
+
+function renderLayout(bodyContent, reqPath) {
+  const isIndex = reqPath === "/";
+  const current = findCurrentLab(reqPath);
+  const { prev, next } = getPrevNext(reqPath);
+
+  const breadcrumb = current ? `
+    <div class="breadcrumb">
+      <a href="/">Labs</a> &rsaquo;
+      ${LAB_NAV.find(c => c.labs.some(l => l.num === current.num))?.category || ''}
+      &rsaquo; Lab ${current.num}
+    </div>
+  ` : '';
+
+  const prevNext = current ? `
+    <div class="lab-nav">
+      ${prev ? `<a href="${prev.path}">&larr; Lab ${prev.num}: ${prev.title}</a>` : '<span></span>'}
+      ${next ? `<a href="${next.path}">Lab ${next.num}: ${next.title} &rarr;</a>` : '<span></span>'}
+    </div>
+  ` : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${current ? `Lab ${current.num}: ${current.title}` : 'Web Vuln by Example'} — Web Vuln by Example</title>
+  <script>
+    // Apply saved theme immediately to prevent flash
+    (function() {
+      var t = localStorage.getItem('theme');
+      if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  ${SHARED_CSS}
+</head>
+<body>
+  <button class="hamburger" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Toggle navigation">&#9776;</button>
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h1><a href="/" style="color:inherit;text-decoration:none;">Web Vuln by Example</a></h1>
+        <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <span class="theme-icon"></span>
+        </button>
+      </div>
+      <p>43 labs &middot; Attack + Defense</p>
+    </div>
+    ${renderSidebar(reqPath)}
+  </nav>
+  <main class="main-content">
+    ${breadcrumb}
+    ${bodyContent}
+    ${!isIndex ? prevNext : ''}
+  </main>
+  <script>
+    // Close sidebar on mobile when clicking a link
+    document.querySelectorAll('.nav-lab').forEach(a => {
+      a.addEventListener('click', () => {
+        document.querySelector('.sidebar').classList.remove('open');
+      });
+    });
+
+    // Dark mode toggle
+    function toggleTheme() {
+      var html = document.documentElement;
+      var isDark = html.getAttribute('data-theme') === 'dark';
+      if (isDark) {
+        html.removeAttribute('data-theme');
+        localStorage.setItem('theme', 'light');
+      } else {
+        html.setAttribute('data-theme', 'dark');
+        localStorage.setItem('theme', 'dark');
+      }
+      updateThemeIcon();
+    }
+    function updateThemeIcon() {
+      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      document.querySelectorAll('.theme-icon').forEach(function(el) {
+        el.textContent = isDark ? '\\u2600' : '\\u263e';
+      });
+    }
+    updateThemeIcon();
+  </script>
+</body>
+</html>`;
+}
+
+/* ========================================================================
+   LAYOUT MIDDLEWARE — wraps all HTML responses in the shared layout
+   ======================================================================== */
+app.use((req, res, next) => {
+  const origSend = res.send.bind(res);
+  res.send = function(body) {
+    const ct = res.get("Content-Type") || "";
+    if (ct.includes("html") && typeof body === "string" && !body.includes("<!DOCTYPE")) {
+      body = renderLayout(body, req.path);
+    }
+    return origSend(body);
+  };
+  next();
+});
+
+/* ========================================================================
    INDEX — lab directory
    ======================================================================== */
+const CAT_CSS_CLASSES = {
+  "XSS & Client-Side": "cat-xss",
+  "Injection Attacks": "cat-injection",
+  "Broken Access & Trust": "cat-access",
+  "Server-Side": "cat-server",
+  "HTTP & Browser": "cat-http",
+  "Application Logic": "cat-logic",
+  "Crypto & Input Handling": "cat-crypto",
+};
+
 app.get("/", (req, res) => {
+  const labCards = LAB_NAV.map(cat => {
+    const catClass = CAT_CSS_CLASSES[cat.category] || '';
+    return `
+      <h2 style="margin-top:1.5rem; font-size:1rem; color:#666; text-transform:uppercase; letter-spacing:0.03em;">
+        ${cat.category}
+      </h2>
+      <div class="lab-grid">
+        ${cat.labs.map(lab => `
+          <a href="${lab.path}" class="lab-card ${catClass}">
+            <h3>Lab ${lab.num} — ${lab.title}</h3>
+            <div class="card-meta">
+              ${lab.cwe ? `<span class="cwe">CWE-${lab.cwe}</span>` : ''}
+            </div>
+          </a>
+        `).join('')}
+      </div>
+    `;
+  }).join('');
+
   res.type("html").send(`
-    <h1>Web Vuln by Example</h1>
-    <style>
-      body { font-family: system-ui; max-width: 800px; margin: 2rem auto; }
-      section { margin: 1.5rem 0; }
-      a { display: block; margin: 0.3rem 0; }
-      code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; }
-      .vuln { color: #c00; }
-      .safe { color: #070; }
-      .info { color: #555; font-size: 0.9em; }
-    </style>
-
-    <section>
-      <h2>Lab 1 — DOM XSS (from previous session)</h2>
-      <a class="vuln" href="/dom-xss?q=<img src=x onerror=alert('XSS')>">
-        /dom-xss — innerHTML sink (vulnerable)
-      </a>
-      <a class="safe" href="/fixed-dom?q=<img src=x onerror=alert('XSS')>">
-        /fixed-dom — textContent sink (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 2 — Open Redirect</h2>
-      <a class="vuln" href="/vuln-redirect?next=ok&redirect_uri=javascript:alert('XSS')">
-        /vuln-redirect — client-side redirect (vulnerable)
-      </a>
-      <a class="safe" href="/fixed-redirect?redirect_uri=http://localhost:3000/safe-landing">
-        /fixed-redirect — server-side allowlist (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 3 — CSP (Content Security Policy)</h2>
-      <a class="vuln" href="/csp-none?q=<img src=x onerror=alert('XSS')>">
-        /csp-none — no CSP at all (XSS works)
-      </a>
-      <a class="safe" href="/csp-strict?q=<img src=x onerror=alert('XSS')>">
-        /csp-strict — strict CSP blocks inline scripts (XSS blocked)
-      </a>
-      <a class="safe" href="/csp-nonce?q=<img src=x onerror=alert('XSS')>">
-        /csp-nonce — nonce-based CSP (app scripts work, XSS blocked)
-      </a>
-      <a class="info" href="/csp-report-only?q=<img src=x onerror=alert('XSS')>">
-        /csp-report-only — report-only mode (XSS runs, but violation logged)
-      </a>
-      <a class="vuln" href="/csp-unsafe-inline?q=<img src=x onerror=alert('XSS')>">
-        /csp-unsafe-inline — 'unsafe-inline' defeats CSP (XSS works again)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 4 — EJS Template Engine</h2>
-      <a class="safe" href="/ejs-escaped?q=<img src=x onerror=alert('XSS')>">
-        /ejs-escaped — auto-escaped output (safe)
-      </a>
-      <a class="vuln" href="/ejs-raw?q=<img src=x onerror=alert('XSS')>">
-        /ejs-raw — raw/unescaped output (vulnerable)
-      </a>
-      <a class="safe" href="/ejs-with-csp?q=<img src=x onerror=alert('XSS')>">
-        /ejs-with-csp — escaped + CSP (defense in depth)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 5 — Stored XSS</h2>
-      <a class="vuln" href="/stored-xss">
-        /stored-xss — persistent XSS via guestbook (vulnerable)
-      </a>
-      <a class="safe" href="/stored-xss-fixed">
-        /stored-xss-fixed — guestbook with escaping + CSP (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 6 — Reflected XSS (Server-Side)</h2>
-      <a class="vuln" href="/reflected?q=<script>alert('XSS')</script>">
-        /reflected — server reflects input unescaped (vulnerable)
-      </a>
-      <a class="safe" href="/reflected-fixed?q=<script>alert('XSS')</script>">
-        /reflected-fixed — server escapes output (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 7 — Cookie Theft + HttpOnly</h2>
-      <a class="vuln" href="/cookie-theft">
-        /cookie-theft — document.cookie exfiltration (vulnerable)
-      </a>
-      <a class="safe" href="/cookie-theft-fixed">
-        /cookie-theft-fixed — HttpOnly cookie (safe)
-      </a>
-      <a class="info" href="/attacker-log">
-        /attacker-log — simulated attacker endpoint (view stolen cookies)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 8 — Postmessage XSS</h2>
-      <a class="vuln" href="/postmessage-xss">
-        /postmessage-xss — no origin check (vulnerable)
-      </a>
-      <a class="safe" href="/postmessage-xss-fixed">
-        /postmessage-xss-fixed — origin validation (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 9 — JSON Injection in Script Tags</h2>
-      <a class="vuln" href="/json-injection?name=</script><script>alert('XSS')</script>">
-        /json-injection — breakout via &lt;/script&gt; (vulnerable)
-      </a>
-      <a class="safe" href="/json-injection-fixed?name=</script><script>alert('XSS')</script>">
-        /json-injection-fixed — escaped JSON embedding (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 10 — URL Parsing Confusion</h2>
-      <a class="vuln" href="/url-confusion?url=javascript:alert('XSS')//http://legit.com">
-        /url-confusion — naive string check (vulnerable)
-      </a>
-      <a class="safe" href="/url-confusion-fixed?url=javascript:alert('XSS')//http://legit.com">
-        /url-confusion-fixed — URL object protocol check (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 11 — DOMPurify Sanitizer</h2>
-      <a class="safe" href="/dompurify-demo">
-        /dompurify-demo — sanitize HTML with DOMPurify (safe)
-      </a>
-      <a class="info" href="/dompurify-bypass">
-        /dompurify-bypass — DOMPurify limitations (info)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 12 — DOM Clobbering</h2>
-      <a class="vuln" href="/dom-clobbering">
-        /dom-clobbering — HTML elements override JS globals (vulnerable)
-      </a>
-      <a class="safe" href="/dom-clobbering-fixed">
-        /dom-clobbering-fixed — const declaration shadows DOM (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 13 — Mutation XSS (mXSS)</h2>
-      <a class="info" href="/mxss">
-        /mxss — browser HTML parser creates XSS from "safe" input (info)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 14 — Prototype Pollution &rarr; XSS</h2>
-      <a class="vuln" href="/proto-pollution?__proto__[polluted]=true">
-        /proto-pollution — deep merge poisons Object.prototype (vulnerable)
-      </a>
-      <a class="safe" href="/proto-pollution-fixed?__proto__[polluted]=true">
-        /proto-pollution-fixed — safe merge with hasOwnProperty (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 15 — Dangling Markup Injection</h2>
-      <a class="vuln" href="/dangling-markup">
-        /dangling-markup — data exfiltration without JavaScript (info)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 16 — Trusted Types</h2>
-      <a class="safe" href="/trusted-types">
-        /trusted-types — browser blocks innerHTML with strings (enforcing)
-      </a>
-      <a class="info" href="/trusted-types-report">
-        /trusted-types-report — report-only mode (info)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 17 — Subresource Integrity (SRI)</h2>
-      <a class="safe" href="/sri-demo">
-        /sri-demo — integrity hash matches (safe)
-      </a>
-      <a class="vuln" href="/sri-tampered">
-        /sri-tampered — wrong integrity hash blocks script (demo)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 18 — Sandbox Iframes</h2>
-      <a class="safe" href="/sandbox-iframe">
-        /sandbox-iframe — sandboxed iframe (restricted)
-      </a>
-      <a class="vuln" href="/sandbox-iframe-none">
-        /sandbox-iframe-none — unsandboxed iframe (unrestricted)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 19 — Security Headers Audit</h2>
-      <a class="info" href="/headers-audit">
-        /headers-audit — self-assessment scorecard (capstone)
-      </a>
-    </section>
-
-    <hr style="margin:2rem 0;">
-    <h1 style="margin-top:2rem;">Beyond XSS: Web Security Labs</h1>
-
-    <h2 style="color:#666;">Injection Attacks</h2>
-
-    <section>
-      <h2>Lab 20 — SQL Injection (CWE-89)</h2>
-      <a class="vuln" href="/sqli">
-        /sqli — string concatenation in SQL query (vulnerable)
-      </a>
-      <a class="safe" href="/sqli-fixed">
-        /sqli-fixed — parameterized query (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 21 — Command Injection (CWE-78)</h2>
-      <a class="vuln" href="/cmdi">
-        /cmdi — exec() with string concat (vulnerable)
-      </a>
-      <a class="safe" href="/cmdi-fixed">
-        /cmdi-fixed — execFile() + allowlist (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 22 — Server-Side Template Injection (CWE-1336)</h2>
-      <a class="vuln" href="/ssti">
-        /ssti — eval() interprets template expressions (vulnerable)
-      </a>
-      <a class="safe" href="/ssti-fixed">
-        /ssti-fixed — plain string concatenation (safe)
-      </a>
-    </section>
-
-    <h2 style="color:#666;">Broken Access &amp; Trust</h2>
-
-    <section>
-      <h2>Lab 23 — CSRF (CWE-352)</h2>
-      <a class="vuln" href="/csrf">
-        /csrf — no CSRF token (vulnerable)
-      </a>
-      <a class="safe" href="/csrf-fixed">
-        /csrf-fixed — CSRF token + SameSite cookie (safe)
-      </a>
-      <a class="vuln" href="/csrf-attacker">
-        /csrf-attacker — attacker page (auto-submits form)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 24 — IDOR (CWE-639)</h2>
-      <a class="vuln" href="/idor?user_id=1">
-        /idor — direct object reference (vulnerable)
-      </a>
-      <a class="safe" href="/idor-fixed?user_id=3">
-        /idor-fixed — session-based access (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 25 — Mass Assignment (CWE-915)</h2>
-      <a class="vuln" href="/mass-assign">
-        /mass-assign — Object.assign(user, req.body) (vulnerable)
-      </a>
-      <a class="safe" href="/mass-assign-fixed">
-        /mass-assign-fixed — explicit field allowlist (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 26 — JWT Weaknesses (CWE-347)</h2>
-      <a class="vuln" href="/jwt-demo">
-        /jwt-demo — alg:"none" bypass (vulnerable + fixed)
-      </a>
-    </section>
-
-    <h2 style="color:#666;">Server-Side Vulnerabilities</h2>
-
-    <section>
-      <h2>Lab 27 — Path Traversal (CWE-22)</h2>
-      <a class="vuln" href="/path-traversal?file=readme.txt">
-        /path-traversal — ../ escapes directory (vulnerable)
-      </a>
-      <a class="safe" href="/path-traversal-fixed?file=readme.txt">
-        /path-traversal-fixed — path.resolve() check (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 28 — SSRF (CWE-918)</h2>
-      <a class="vuln" href="/ssrf">
-        /ssrf — fetches any URL (vulnerable)
-      </a>
-      <a class="safe" href="/ssrf-fixed">
-        /ssrf-fixed — blocks private IPs (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 29 — XXE (CWE-611)</h2>
-      <a class="vuln" href="/xxe">
-        /xxe — XML external entity (simulated vulnerable)
-      </a>
-      <a class="safe" href="/xxe-fixed">
-        /xxe-fixed — DTD processing disabled (safe)
-      </a>
-    </section>
-
-    <h2 style="color:#666;">HTTP &amp; Browser Security</h2>
-
-    <section>
-      <h2>Lab 30 — CORS Misconfiguration (CWE-942)</h2>
-      <a class="vuln" href="/cors-misconfig">
-        /cors-misconfig — wildcard Access-Control-Allow-Origin (info)
-      </a>
-      <a class="vuln" href="/cors-attacker">
-        /cors-attacker — cross-origin data theft demo
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 31 — Clickjacking (CWE-1021)</h2>
-      <a class="vuln" href="/clickjack">
-        /clickjack — transparent iframe overlay (vulnerable)
-      </a>
-      <a class="safe" href="/clickjack-fixed">
-        /clickjack-fixed — X-Frame-Options: DENY (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 32 — CRLF / Header Injection (CWE-113)</h2>
-      <a class="vuln" href="/crlf">
-        /crlf — header injection via newlines (simulated vulnerable)
-      </a>
-      <a class="safe" href="/crlf-fixed">
-        /crlf-fixed — CRLF characters stripped (safe)
-      </a>
-    </section>
-
-    <h2 style="color:#666;">Application Logic</h2>
-
-    <section>
-      <h2>Lab 33 — Insecure Deserialization (CWE-502)</h2>
-      <a class="vuln" href="/deserialize">
-        /deserialize — eval() parses user data (vulnerable)
-      </a>
-      <a class="safe" href="/deserialize-fixed">
-        /deserialize-fixed — JSON.parse() only (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 34 — ReDoS (CWE-1333)</h2>
-      <a class="vuln" href="/redos">
-        /redos — catastrophic backtracking regex (vulnerable)
-      </a>
-      <a class="safe" href="/redos-fixed">
-        /redos-fixed — linear-time regex (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 35 — Insecure Randomness (CWE-330)</h2>
-      <a class="info" href="/weak-random">
-        /weak-random — Math.random() vs crypto.randomBytes() (info)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 36 — Sensitive Data in Errors (CWE-200)</h2>
-      <a class="vuln" href="/error-leak">
-        /error-leak — stack trace with credentials (vulnerable)
-      </a>
-      <a class="safe" href="/error-leak-fixed">
-        /error-leak-fixed — generic error + reference ID (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 37 — Race Conditions (CWE-362)</h2>
-      <a class="vuln" href="/race-condition">
-        /race-condition — TOCTOU with concurrent transfers (vulnerable)
-      </a>
-      <a class="safe" href="/race-condition-fixed">
-        /race-condition-fixed — mutex serialization (safe)
-      </a>
-    </section>
-
-    <h2 style="color:#666;">Cryptography &amp; Input Handling</h2>
-
-    <section>
-      <h2>Lab 38 — HTTP Parameter Pollution (CWE-235)</h2>
-      <a class="vuln" href="/hpp?role=user&role=admin">
-        /hpp — duplicate params bypass validation (vulnerable)
-      </a>
-      <a class="safe" href="/hpp-fixed?role=user&role=admin">
-        /hpp-fixed — strict type checking rejects arrays (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 39 — Insecure Password Storage (CWE-916)</h2>
-      <a class="vuln" href="/weak-password">
-        /weak-password — MD5 hash without salt (vulnerable)
-      </a>
-      <a class="safe" href="/weak-password-fixed">
-        /weak-password-fixed — scrypt with random salt (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 40 — Host Header Injection (CWE-644)</h2>
-      <a class="vuln" href="/host-header">
-        /host-header — reset link trusts Host header (vulnerable)
-      </a>
-      <a class="safe" href="/host-header-fixed">
-        /host-header-fixed — allowlisted origin (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 41 — Prototype Pollution (CWE-1321)</h2>
-      <a class="vuln" href="/proto-pollution">
-        /proto-pollution — unsafe object merge via __proto__ (vulnerable)
-      </a>
-      <a class="safe" href="/proto-pollution-fixed">
-        /proto-pollution-fixed — safe merge with key filtering (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 42 — Timing Attack on String Comparison (CWE-208)</h2>
-      <a class="vuln" href="/timing-attack">
-        /timing-attack — early-exit === leaks secret length (vulnerable)
-      </a>
-      <a class="safe" href="/timing-attack-fixed">
-        /timing-attack-fixed — constant-time comparison (safe)
-      </a>
-    </section>
-
-    <section>
-      <h2>Lab 43 — Unrestricted File Upload (CWE-434)</h2>
-      <a class="vuln" href="/file-upload">
-        /file-upload — no validation on filename or content (vulnerable)
-      </a>
-      <a class="safe" href="/file-upload-fixed">
-        /file-upload-fixed — allowlist extension, sanitize name, check size (safe)
-      </a>
-    </section>
+    <div style="margin-bottom:2rem;">
+      <h1 style="margin:0 0 0.5rem;">Web Vuln by Example</h1>
+      <p style="color:#666; margin:0; font-size:1rem;">
+        43 hands-on labs. Vulnerable + fixed code side-by-side.<br>
+        <code style="font-size:0.85rem;">npm install &amp;&amp; npm start</code>
+      </p>
+    </div>
+    ${labCards}
   `);
 });
 
@@ -2255,7 +2268,7 @@ function safeMerge(target, source) {
 }
 
 // --- 14a: Vulnerable — prototype pollution via deep merge ---
-app.get("/proto-pollution", (req, res) => {
+app.get("/proto-pollution-xss", (req, res) => {
   // Create a fresh object so pollution doesn't persist across requests
   const defaults = { theme: "light", lang: "en" };
   const userSettings = req.query;
@@ -2330,7 +2343,7 @@ test.innerHTML = ${escapeHtml(JSON.stringify(testObj.innerHTML))}  // should be 
 });
 
 // --- 14b: Fixed — safe merge ---
-app.get("/proto-pollution-fixed", (req, res) => {
+app.get("/proto-pollution-xss-fixed", (req, res) => {
   const defaults = { theme: "light", lang: "en" };
   const userSettings = req.query;
 
@@ -6243,6 +6256,7 @@ app.post("/file-upload-fixed", async (req, res) => {
 /* ========================================================================
    Start server
    ======================================================================== */
-app.listen(3000, () => {
-  console.log("Web Vuln by Example running at http://localhost:3000");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Web Vuln by Example running at http://localhost:${PORT}`);
 });
