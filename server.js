@@ -22,25 +22,25 @@ function escapeHtml(str) {
    ======================================================================== */
 const LAB_NAV = [
   { category: "XSS & Client-Side", labs: [
-    { num: 1, title: "DOM XSS", path: "/dom-xss" },
-    { num: 2, title: "Open Redirect", path: "/vuln-redirect" },
-    { num: 3, title: "CSP", path: "/csp-none" },
-    { num: 4, title: "EJS Template Engine", path: "/ejs-escaped" },
-    { num: 5, title: "Stored XSS", path: "/stored-xss" },
-    { num: 6, title: "Reflected XSS", path: "/reflected" },
-    { num: 7, title: "Cookie Theft + HttpOnly", path: "/cookie-theft" },
-    { num: 8, title: "Postmessage XSS", path: "/postmessage-xss" },
-    { num: 9, title: "JSON Injection", path: "/json-injection" },
-    { num: 10, title: "URL Parsing Confusion", path: "/url-confusion" },
-    { num: 11, title: "DOMPurify Sanitizer", path: "/dompurify-demo" },
-    { num: 12, title: "DOM Clobbering", path: "/dom-clobbering" },
-    { num: 13, title: "Mutation XSS", path: "/mxss" },
-    { num: 14, title: "Prototype Pollution \u2192 XSS", path: "/proto-pollution-xss" },
-    { num: 15, title: "Dangling Markup", path: "/dangling-markup" },
-    { num: 16, title: "Trusted Types", path: "/trusted-types" },
-    { num: 17, title: "SRI", path: "/sri-demo" },
-    { num: 18, title: "Sandbox Iframes", path: "/sandbox-iframe" },
-    { num: 19, title: "Security Headers Audit", path: "/headers-audit" },
+    { num: 1, title: "DOM XSS", cwe: "79", path: "/dom-xss-lab" },
+    { num: 2, title: "Open Redirect", cwe: "601", path: "/open-redirect" },
+    { num: 3, title: "CSP", cwe: "693", path: "/csp-none" },
+    { num: 4, title: "EJS Template Engine", cwe: "79", path: "/ejs-escaped" },
+    { num: 5, title: "Stored XSS", cwe: "79", path: "/stored-xss" },
+    { num: 6, title: "Reflected XSS", cwe: "79", path: "/reflected" },
+    { num: 7, title: "Cookie Theft + HttpOnly", cwe: "1004", path: "/cookie-theft" },
+    { num: 8, title: "Postmessage XSS", cwe: "345", path: "/postmessage-xss" },
+    { num: 9, title: "JSON Injection", cwe: "79", path: "/json-injection" },
+    { num: 10, title: "URL Parsing Confusion", cwe: "601", path: "/url-confusion" },
+    { num: 11, title: "DOMPurify Sanitizer", cwe: "79", path: "/dompurify-demo" },
+    { num: 12, title: "DOM Clobbering", cwe: "79", path: "/dom-clobbering" },
+    { num: 13, title: "Mutation XSS", cwe: "79", path: "/mxss" },
+    { num: 14, title: "Prototype Pollution \u2192 XSS", cwe: "1321", path: "/proto-pollution-xss" },
+    { num: 15, title: "Dangling Markup", cwe: "116", path: "/dangling-markup" },
+    { num: 16, title: "Trusted Types", cwe: "79", path: "/trusted-types" },
+    { num: 17, title: "SRI", cwe: "353", path: "/sri-demo" },
+    { num: 18, title: "Sandbox Iframes", cwe: "1021", path: "/sandbox-iframe" },
+    { num: 19, title: "Security Headers Audit", cwe: "693", path: "/headers-audit" },
   ]},
   { category: "Injection Attacks", labs: [
     { num: 20, title: "SQL Injection", cwe: "89", path: "/sqli" },
@@ -84,11 +84,27 @@ const LAB_NAV = [
 const ALL_LAB_PATHS = [];
 LAB_NAV.forEach(cat => cat.labs.forEach(lab => ALL_LAB_PATHS.push(lab)));
 
+// Explicit sub-route → primary path mappings for labs whose sub-routes
+// can't be derived by suffix stripping alone
+const SUB_ROUTE_MAP = {
+  "/dom-xss": "/dom-xss-lab",
+  "/fixed-dom": "/dom-xss-lab",
+  "/vuln-redirect": "/open-redirect",
+  "/fixed-redirect": "/open-redirect",
+  "/safe-landing": "/open-redirect",
+};
+
 function findCurrentLab(reqPath) {
   const clean = reqPath.split("?")[0];
   // Direct match on primary path
   let match = ALL_LAB_PATHS.find(l => clean === l.path);
   if (match) return match;
+  // Explicit sub-route mapping
+  const mapped = SUB_ROUTE_MAP[clean];
+  if (mapped) {
+    match = ALL_LAB_PATHS.find(l => mapped === l.path);
+    if (match) return match;
+  }
   // Match fixed variants (e.g. /sqli-fixed -> lab 20)
   const base = clean.replace(/-fixed$/, "").replace(/-none$/, "").replace(/-strict$/, "")
     .replace(/-nonce$/, "").replace(/-report-only$/, "").replace(/-unsafe-inline$/, "")
@@ -499,6 +515,61 @@ app.get("/", (req, res) => {
 /* ========================================================================
    LAB 1 — DOM XSS
    ======================================================================== */
+app.get("/dom-xss-lab", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 1: DOM XSS — innerHTML vs textContent</h1>
+    <p>This lab demonstrates a <strong>DOM-based XSS</strong> vulnerability: untrusted input from the URL
+    query string flows into <code>innerHTML</code>, which parses it as HTML and executes embedded JavaScript.</p>
+
+    <h3>Source Code (the bug)</h3>
+    <pre ${PRE}><code><span style="color:#9cdcfe;">const</span> q = <span style="color:#9cdcfe;">new</span> <span style="color:#4ec9b0;">URLSearchParams</span>(<span style="color:#4ec9b0;">window</span>.location.search).<span style="color:#dcdcaa;">get</span>(<span style="color:#ce9178;">"q"</span>);
+
+<span style="color:#6a9955;">// Source: window.location.search — untrusted user input</span>
+<span style="color:#6a9955;">// The query string comes directly from the URL, which the attacker controls.</span>
+
+document.<span style="color:#dcdcaa;">getElementById</span>(<span style="color:#ce9178;">"output"</span>)<span style="background:#5c1a1a;color:#f48771;font-weight:bold;">.innerHTML = q;</span>  <span style="color:#f44747;">// &lt;-- THE BUG</span>
+
+<span style="color:#6a9955;">// Sink: innerHTML — parses the string as HTML</span>
+<span style="color:#6a9955;">// The browser creates real DOM elements from the string.</span>
+<span style="color:#6a9955;">// &lt;img src=x onerror=alert('XSS')&gt; becomes a real &lt;img&gt; element</span>
+<span style="color:#6a9955;">// that fires its onerror handler as JavaScript.</span></code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker crafts a URL: <code>/dom-xss?q=&lt;img src=x onerror=alert('XSS')&gt;</code></li>
+      <li>Victim clicks the link</li>
+      <li>Browser reads <code>q</code> from the URL (<strong>source</strong>)</li>
+      <li><code>innerHTML</code> parses it as HTML (<strong>sink</strong>)</li>
+      <li><code>&lt;img&gt;</code> element is created, <code>src=x</code> fails, <code>onerror</code> fires JavaScript</li>
+    </ol>
+
+    <h3>Try It</h3>
+    <p>
+      <a class="vuln" href="/dom-xss?q=%3Cimg%20src%3Dx%20onerror%3Dalert('XSS')%3E">Lab 1a: Vulnerable (innerHTML)</a> —
+      fires <code>alert('XSS')</code> via injected <code>&lt;img onerror&gt;</code>
+    </p>
+    <p>
+      <a class="safe" href="/fixed-dom?q=%3Cimg%20src%3Dx%20onerror%3Dalert('XSS')%3E">Lab 1b: Fixed (textContent)</a> —
+      displays the payload as plain text, no execution
+    </p>
+
+    <h3>The Fix</h3>
+    <pre ${PRE}><code><span style="color:#f48771;text-decoration:line-through;">element.innerHTML = q;    // parses HTML — dangerous</span>
+<span style="color:#89d185;">element.textContent = q;  // plain text — safe</span></code></pre>
+
+    <details>
+      <summary>Why is this vulnerable?</summary>
+      <p><code>innerHTML</code> parses the string as HTML, so
+      <code>&lt;img src=x onerror=alert('XSS')&gt;</code> creates a real
+      element that fires JavaScript.</p>
+      <p><strong>The core issue:</strong> untrusted input (URL query string) flows
+      into a dangerous sink (<code>innerHTML</code>) with no sanitization in between.</p>
+      <p><strong>The fix:</strong> <code>textContent</code> treats everything as plain text.
+      HTML tags are displayed literally, not parsed. Open DevTools and compare the Elements panel.</p>
+    </details>
+  `);
+});
+
 app.get("/dom-xss", (req, res) => {
   res.type("html").send(`
     <h1>Lab 1a: DOM XSS — innerHTML (Vulnerable)</h1>
@@ -585,6 +656,82 @@ document.<span style="color:#dcdcaa;">getElementById</span>(<span style="color:#
 /* ========================================================================
    LAB 2 — Open Redirect
    ======================================================================== */
+app.get("/open-redirect", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 2: Open Redirect + XSS via <code>location</code></h1>
+    <p>This lab demonstrates a <strong>broken trust boundary</strong>: the server validates one parameter
+    (<code>next</code>), but the client-side JavaScript reads a completely different parameter
+    (<code>redirect_uri</code>) and blindly assigns it to <code>location</code>.</p>
+
+    <h3>Server-Side Code</h3>
+    <pre ${PRE}><code>app.<span style="color:#dcdcaa;">get</span>(<span style="color:#ce9178;">"/vuln-redirect"</span>, (req, res) =&gt; {
+  <span style="color:#9cdcfe;">const</span> next = req.query.next;
+
+  <span style="color:#6a9955;">// Server validates "next" — but this isn't what the client uses!</span>
+  <span style="color:#c586c0;">if</span> (next !== <span style="color:#ce9178;">"ok"</span>) {
+    <span style="color:#c586c0;">return</span> res.<span style="color:#dcdcaa;">status</span>(400).<span style="color:#dcdcaa;">send</span>(<span style="color:#ce9178;">"next=ok is required"</span>);
+  }
+
+  <span style="color:#6a9955;">// Server sends HTML with client-side redirect logic...</span>
+});</code></pre>
+
+    <h3>Client-Side Code (the bug)</h3>
+    <pre ${PRE}><code><span style="color:#9cdcfe;">const</span> u = <span style="color:#9cdcfe;">new</span> <span style="color:#4ec9b0;">URLSearchParams</span>(window.location.search).<span style="color:#dcdcaa;">get</span>(<span style="color:#ce9178;">"redirect_uri"</span>);
+
+<span style="color:#6a9955;">// Source: window.location.search — attacker controls this</span>
+<span style="color:#6a9955;">// The server validated "next", but the client reads "redirect_uri"</span>
+<span style="color:#6a9955;">// — a completely different parameter that was never checked.</span>
+
+<span style="background:#5c1a1a;color:#f48771;font-weight:bold;">location = u;</span>  <span style="color:#f44747;">// &lt;-- THE BUG</span>
+
+<span style="color:#6a9955;">// Sink: location assignment — navigates the browser</span>
+<span style="color:#6a9955;">// javascript:alert('XSS') is a valid "URL" that executes JS</span></code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker crafts: <code>/vuln-redirect?next=ok&amp;redirect_uri=javascript:alert('XSS')</code></li>
+      <li>Server checks <code>next=ok</code> — passes validation</li>
+      <li>Client reads <code>redirect_uri</code> — never validated by anyone</li>
+      <li><code>location = "javascript:alert('XSS')"</code> executes JavaScript</li>
+    </ol>
+
+    <h3>Try It</h3>
+    <p>
+      <a class="vuln" href="/vuln-redirect?next=ok&redirect_uri=javascript:alert('XSS')">Lab 2a: Vulnerable Redirect</a> —
+      triggers <code>javascript:alert('XSS')</code> via the unchecked <code>redirect_uri</code> param
+    </p>
+    <p>
+      <a class="safe" href="/fixed-redirect?redirect_uri=javascript:alert('XSS')">Lab 2b: Fixed Redirect</a> —
+      server-side allowlist blocks the malicious URL
+    </p>
+
+    <h3>The Fix</h3>
+    <pre ${PRE}><code><span style="color:#9cdcfe;">const</span> redirectUri = req.query.redirect_uri;
+
+<span style="background:#1a3a1a;color:#89d185;font-weight:bold;">const allowed = new Set(["http://localhost:3000/safe-landing"]);</span>  <span style="color:#6a9955;">// &lt;-- THE FIX</span>
+
+<span style="color:#6a9955;">// Server-side allowlist: only pre-approved URLs are accepted.</span>
+<span style="color:#6a9955;">// The redirect happens server-side via res.redirect(),</span>
+<span style="color:#6a9955;">// not client-side via location = ...</span>
+
+<span style="color:#c586c0;">if</span> (!allowed.<span style="color:#dcdcaa;">has</span>(redirectUri)) {
+  <span style="color:#c586c0;">return</span> res.<span style="color:#dcdcaa;">status</span>(400).<span style="color:#dcdcaa;">send</span>(<span style="color:#ce9178;">"Invalid redirect_uri"</span>);
+}
+<span style="background:#1a3a1a;color:#89d185;font-weight:bold;">res.redirect(302, redirectUri);</span>  <span style="color:#6a9955;">// server controls the redirect</span></code></pre>
+
+    <details>
+      <summary>Why is this vulnerable?</summary>
+      <p><strong>Broken trust boundary:</strong> The server validates parameter A,
+      but the client uses parameter B. The attacker satisfies the server check
+      while injecting a malicious value into the unchecked parameter.</p>
+      <p><strong>The core issue:</strong> Client-side <code>location</code> assignment
+      accepts any string — including <code>javascript:</code> URIs — as a navigation target.
+      Moving the redirect logic server-side and using an allowlist eliminates both the
+      open redirect and the XSS vector.</p>
+    </details>
+  `);
+});
+
 app.get("/vuln-redirect", (req, res) => {
   const next = req.query.next;
   if (next !== "ok") {
@@ -6257,6 +6404,9 @@ app.post("/file-upload-fixed", async (req, res) => {
    Start server
    ======================================================================== */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Web Vuln by Example running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Web Vuln by Example running at http://localhost:${PORT}`);
+  });
+}
+module.exports = app;
