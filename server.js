@@ -450,6 +450,36 @@ app.get("/", (req, res) => {
         /host-header-fixed — allowlisted origin (safe)
       </a>
     </section>
+
+    <section>
+      <h2>Lab 41 — Prototype Pollution (CWE-1321)</h2>
+      <a class="vuln" href="/proto-pollution">
+        /proto-pollution — unsafe object merge via __proto__ (vulnerable)
+      </a>
+      <a class="safe" href="/proto-pollution-fixed">
+        /proto-pollution-fixed — safe merge with key filtering (safe)
+      </a>
+    </section>
+
+    <section>
+      <h2>Lab 42 — Timing Attack on String Comparison (CWE-208)</h2>
+      <a class="vuln" href="/timing-attack">
+        /timing-attack — early-exit === leaks secret length (vulnerable)
+      </a>
+      <a class="safe" href="/timing-attack-fixed">
+        /timing-attack-fixed — constant-time comparison (safe)
+      </a>
+    </section>
+
+    <section>
+      <h2>Lab 43 — Unrestricted File Upload (CWE-434)</h2>
+      <a class="vuln" href="/file-upload">
+        /file-upload — no validation on filename or content (vulnerable)
+      </a>
+      <a class="safe" href="/file-upload-fixed">
+        /file-upload-fixed — allowlist extension, sanitize name, check size (safe)
+      </a>
+    </section>
   `);
 });
 
@@ -5534,6 +5564,680 @@ app.post("/host-header-fixed", (req, res) => {
 
 <span style="color:#608b4e;"># Reset link will still point to myapp.example.com, not evil.com</span></pre>
   `);
+});
+
+
+/* ========================================================================
+   LAB 41 — Prototype Pollution (CWE-1321)
+   ======================================================================== */
+app.use("/proto-pollution", express.json());
+app.use("/proto-pollution-fixed", express.json());
+
+// Unsafe recursive merge — does not filter __proto__ or constructor
+function unsafeMerge(target, source) {
+  for (const key in source) {
+    if (typeof source[key] === "object" && source[key] !== null && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      unsafeMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+// Safe recursive merge — blocks dangerous keys
+function safeMerge(target, source) {
+  for (const key in source) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (typeof source[key] === "object" && source[key] !== null && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      safeMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+app.get("/proto-pollution", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 41a: Prototype Pollution (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>This app merges user-supplied JSON into a config object. Try injecting <code>__proto__</code>:</p>
+    <form id="ppform">
+      <textarea id="ppinput" rows="6" cols="50">{"__proto__": {"isAdmin": true}}</textarea><br><br>
+      <button type="submit">Merge Config</button>
+    </form>
+    <p class="info">The payload pollutes <code>Object.prototype</code>, so <em>every</em> object inherits <code>isAdmin: true</code>.</p>
+    <div id="result"></div>
+    <hr>
+
+    <script>
+      document.getElementById("ppform").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const body = document.getElementById("ppinput").value;
+        const resp = await fetch("/proto-pollution", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body
+        });
+        document.getElementById("result").innerHTML = await resp.text();
+      });
+    </script>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Unsafe merge — no key filtering</span>
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">unsafeMerge</span>(target, source) {
+  <span style="color:#c586c0;">for</span> (<span style="color:#9cdcfe;">const</span> key <span style="color:#c586c0;">in</span> source) {
+    <span style="color:#c586c0;">if</span> (<span style="color:#569cd6;">typeof</span> source[key] === <span style="color:#ce9178;">"object"</span>) {
+      <span style="color:#c586c0;">if</span> (!target[key]) target[key] = {};
+      unsafeMerge(target[key], source[key]);
+    } <span style="color:#c586c0;">else</span> {
+      target[key] = source[key]; <span style="color:#608b4e;">// &#9888; writes to __proto__!</span>
+    }
+  }
+}</code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker sends <code>{"__proto__": {"isAdmin": true}}</code></li>
+      <li><code>unsafeMerge</code> recurses into <code>__proto__</code> as a normal key</li>
+      <li>This writes to <code>Object.prototype.isAdmin = true</code></li>
+      <li>Now <code>{}.isAdmin === true</code> for every object in the process</li>
+      <li>Authorization checks like <code>if (user.isAdmin)</code> are bypassed</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <p>Prototype pollution modifies the prototype chain shared by all objects. It can lead to:</p>
+      <ul>
+        <li><strong>Privilege escalation:</strong> inject <code>isAdmin</code>, <code>role</code>, etc.</li>
+        <li><strong>RCE:</strong> pollute properties read by templating engines or child_process</li>
+        <li><strong>DoS:</strong> override <code>toString</code> or <code>valueOf</code> to crash the app</li>
+      </ul>
+      <p>Lab 14 shows prototype pollution leading to XSS. This lab covers the general case.</p>
+    </details>
+  `);
+});
+
+app.post("/proto-pollution", (req, res) => {
+  // Use a fresh object per request to avoid cross-request pollution
+  const config = { theme: "light", lang: "en" };
+  const userInput = req.body;
+
+  unsafeMerge(config, userInput);
+
+  // Check if prototype was polluted
+  const emptyObj = {};
+  const pollutedKeys = Object.keys(userInput.__proto__ || userInput["__proto__"] || {});
+  const isPolluted = pollutedKeys.some((k) => emptyObj[k] !== undefined && !(k in {}));
+
+  // Simulate an authorization check
+  const user = { name: "regular_user" };
+  const hasAdmin = user.isAdmin;
+
+  res.type("html").send(`
+    <h3>Merge Result</h3>
+    <p>Config after merge:</p>
+    <pre ${PRE}>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+
+    <h3>Pollution Check</h3>
+    <p>New empty object <code>{}.isAdmin</code> = <code>${escapeHtml(String(emptyObj.isAdmin))}</code></p>
+    ${hasAdmin
+      ? `<p style="color:red;font-weight:bold;">&#9888; Prototype polluted! A plain user object now has <code>isAdmin: ${escapeHtml(String(hasAdmin))}</code></p>
+         <p>Any authorization check like <code>if (user.isAdmin)</code> is now bypassed for ALL users.</p>`
+      : `<p style="color:green;">Prototype not polluted (try the <code>__proto__</code> payload above).</p>`}
+  `);
+});
+
+app.get("/proto-pollution-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 41b: Prototype Pollution (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Same merge operation, but dangerous keys are filtered:</p>
+    <form id="ppform">
+      <textarea id="ppinput" rows="6" cols="50">{"__proto__": {"isAdmin": true}}</textarea><br><br>
+      <button type="submit">Merge Config</button>
+    </form>
+    <div id="result"></div>
+    <hr>
+
+    <script>
+      document.getElementById("ppform").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const body = document.getElementById("ppinput").value;
+        const resp = await fetch("/proto-pollution-fixed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body
+        });
+        document.getElementById("result").innerHTML = await resp.text();
+      });
+    </script>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Safe merge — blocks __proto__, constructor, prototype</span>
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">safeMerge</span>(target, source) {
+  <span style="color:#c586c0;">for</span> (<span style="color:#9cdcfe;">const</span> key <span style="color:#c586c0;">in</span> source) {
+    <span style="color:#c586c0;">if</span> (key === <span style="color:#ce9178;">"__proto__"</span> || key === <span style="color:#ce9178;">"constructor"</span> || key === <span style="color:#ce9178;">"prototype"</span>) <span style="color:#c586c0;">continue</span>;
+    <span style="color:#c586c0;">if</span> (<span style="color:#569cd6;">typeof</span> source[key] === <span style="color:#ce9178;">"object"</span>) {
+      <span style="color:#c586c0;">if</span> (!target[key]) target[key] = {};
+      safeMerge(target[key], source[key]);
+    } <span style="color:#c586c0;">else</span> {
+      target[key] = source[key];
+    }
+  }
+}</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <p>The fix skips <code>__proto__</code>, <code>constructor</code>, and <code>prototype</code>
+         keys during merge. These are the only keys that can reach the prototype chain.</p>
+      <p>Better alternatives:</p>
+      <ul>
+        <li>Use <code>Object.create(null)</code> for config objects (no prototype)</li>
+        <li>Use <code>Map</code> instead of plain objects</li>
+        <li>Use <code>Object.freeze(Object.prototype)</code> to prevent modifications</li>
+        <li>Use a safe merge library that handles this (e.g., lodash ≥4.17.12)</li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/proto-pollution-fixed", (req, res) => {
+  const config = { theme: "light", lang: "en" };
+  const userInput = req.body;
+
+  safeMerge(config, userInput);
+
+  const emptyObj = {};
+  const user = { name: "regular_user" };
+
+  res.type("html").send(`
+    <h3>Merge Result</h3>
+    <p>Config after merge:</p>
+    <pre ${PRE}>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+
+    <h3>Pollution Check</h3>
+    <p>New empty object <code>{}.isAdmin</code> = <code>${escapeHtml(String(emptyObj.isAdmin))}</code></p>
+    <p><code>user.isAdmin</code> = <code>${escapeHtml(String(user.isAdmin))}</code></p>
+    <p style="color:green;font-weight:bold;">&#10004; Prototype is clean. The <code>__proto__</code> key was skipped during merge.</p>
+  `);
+});
+
+/* ========================================================================
+   LAB 42 — Timing Attack on String Comparison (CWE-208)
+   ======================================================================== */
+app.use("/timing-attack", express.urlencoded({ extended: true }));
+app.use("/timing-attack-fixed", express.urlencoded({ extended: true }));
+
+const TIMING_SECRET = crypto.randomBytes(16).toString("hex");
+
+app.get("/timing-attack", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 42a: Timing Attack — Unsafe Comparison (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Guess the API secret key. The server uses <code>===</code> to compare — each correct character
+       takes slightly longer, leaking information through response time.</p>
+    <form method="post">
+      <label>API Key guess: <input type="text" name="guess" value="" size="40" placeholder="try different lengths..."></label><br><br>
+      <button type="submit">Verify</button>
+    </form>
+    <p class="info">Secret length: ${TIMING_SECRET.length} chars (hex). In a real attack, even the length is unknown.</p>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Vulnerable: === exits on first mismatch</span>
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">checkKey</span>(input, secret) {
+  <span style="color:#c586c0;">if</span> (input.length !== secret.length) <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">false</span>;
+  <span style="color:#c586c0;">for</span> (<span style="color:#9cdcfe;">let</span> i = <span style="color:#b5cea8;">0</span>; i &lt; input.length; i++) {
+    <span style="color:#c586c0;">if</span> (input[i] !== secret[i]) <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">false</span>; <span style="color:#608b4e;">// &#9888; early exit!</span>
+  }
+  <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">true</span>;
+}
+
+<span style="color:#608b4e;">// Equivalent to: input === secret</span>
+<span style="color:#608b4e;">// Both leak timing info — the more correct chars, the longer it takes.</span></code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker sends guesses and measures response time (microseconds)</li>
+      <li>A guess with the correct first character takes slightly longer (one more loop iteration)</li>
+      <li>Attacker brute-forces character by character: 16×32 guesses for a 32-char hex key instead of 16<sup>32</sup></li>
+      <li>Time complexity drops from O(n<sup>k</sup>) to O(n×k) — from impossible to trivial</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <p>The <code>===</code> operator (and any loop with early exit) returns <code>false</code>
+         as soon as a mismatch is found. This means correct prefixes take measurably longer
+         than wrong ones. Over many requests, statistical analysis can recover the secret
+         one byte at a time.</p>
+      <p>This attack works on: API keys, HMAC signatures, CSRF tokens, password reset tokens,
+         and any secret compared with <code>===</code> or manual loops.</p>
+    </details>
+  `);
+});
+
+app.post("/timing-attack", (req, res) => {
+  const guess = req.body.guess || "";
+
+  // Vulnerable: early-exit comparison with artificial delay to make timing visible
+  const start = process.hrtime.bigint();
+  let match = true;
+  if (guess.length !== TIMING_SECRET.length) {
+    match = false;
+  } else {
+    for (let i = 0; i < guess.length; i++) {
+      // Artificial 0.1ms delay per matching char to make the timing difference visible in a demo
+      if (guess[i] === TIMING_SECRET[i]) {
+        const wait = process.hrtime.bigint() + 100000n; // 0.1ms
+        while (process.hrtime.bigint() < wait) { /* busy wait */ }
+      } else {
+        match = false;
+        break; // Early exit — leaks position of first mismatch
+      }
+    }
+  }
+  const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
+
+  // Count matching prefix length
+  let correctPrefix = 0;
+  for (let i = 0; i < Math.min(guess.length, TIMING_SECRET.length); i++) {
+    if (guess[i] === TIMING_SECRET[i]) correctPrefix++;
+    else break;
+  }
+
+  res.type("html").send(`
+    <h1>Lab 42a: Timing Attack — Result (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/timing-attack">Try again</a></p>
+
+    <h3>Comparison Result</h3>
+    <p>Your guess: <code>${escapeHtml(guess)}</code> (${guess.length} chars)</p>
+    <p>Match: ${match
+      ? '<span style="color:green;font-weight:bold;">YES — correct key!</span>'
+      : '<span style="color:red;">NO</span>'}</p>
+    <p>Response time: <strong>${elapsed.toFixed(3)} ms</strong></p>
+    <p>Correct prefix length: <strong style="color:${correctPrefix > 0 ? "orange" : "red"};">${correctPrefix}</strong> characters</p>
+
+    ${!match ? `
+      <p style="color:red;">&#9888; The response time correlates with the number of correct characters.
+         An attacker can measure this to brute-force the key one character at a time.</p>
+      <p class="info">Hint: first 4 chars of the secret are <code>${escapeHtml(TIMING_SECRET.substring(0, 4))}...</code></p>
+    ` : ""}
+  `);
+});
+
+app.get("/timing-attack-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 42b: Timing Attack — Constant-Time Comparison (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Same secret, but compared with <code>crypto.timingSafeEqual()</code> — response time
+       is constant regardless of how many characters match.</p>
+    <form method="post">
+      <label>API Key guess: <input type="text" name="guess" value="" size="40" placeholder="try different lengths..."></label><br><br>
+      <button type="submit">Verify</button>
+    </form>
+    <p class="info">Secret length: ${TIMING_SECRET.length} chars. Try the same guesses from the vulnerable version.</p>
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Fixed: constant-time comparison</span>
+<span style="color:#9cdcfe;">const</span> crypto = require(<span style="color:#ce9178;">"crypto"</span>);
+
+<span style="color:#c586c0;">function</span> <span style="color:#dcdcaa;">safeCheckKey</span>(input, secret) {
+  <span style="color:#608b4e;">// Pad to same length to avoid leaking length info</span>
+  <span style="color:#9cdcfe;">const</span> a = <span style="color:#4ec9b0;">Buffer</span>.from(input.padEnd(secret.length));
+  <span style="color:#9cdcfe;">const</span> b = <span style="color:#4ec9b0;">Buffer</span>.from(secret);
+  <span style="color:#c586c0;">if</span> (a.length !== b.length) <span style="color:#c586c0;">return</span> <span style="color:#569cd6;">false</span>;
+  <span style="color:#c586c0;">return</span> crypto.<span style="color:#dcdcaa;">timingSafeEqual</span>(a, b)
+    &amp;&amp; input.length === secret.length;
+}</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <p><code>crypto.timingSafeEqual()</code> always compares every byte, regardless of where
+         mismatches occur. The comparison takes the same amount of time whether 0 or all
+         characters match, making timing analysis useless.</p>
+      <p>The length check uses <code>padEnd</code> to ensure both buffers are the same size
+         before comparison, preventing length-based timing leaks while still rejecting
+         wrong-length inputs.</p>
+    </details>
+  `);
+});
+
+app.post("/timing-attack-fixed", (req, res) => {
+  const guess = req.body.guess || "";
+
+  const start = process.hrtime.bigint();
+  // Fixed: constant-time comparison
+  let match = false;
+  const padded = guess.padEnd(TIMING_SECRET.length);
+  const a = Buffer.from(padded);
+  const b = Buffer.from(TIMING_SECRET);
+  if (a.length === b.length) {
+    match = crypto.timingSafeEqual(a, b) && guess.length === TIMING_SECRET.length;
+  }
+  const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
+
+  // Count matching prefix (for display only — the server doesn't leak this via timing)
+  let correctPrefix = 0;
+  for (let i = 0; i < Math.min(guess.length, TIMING_SECRET.length); i++) {
+    if (guess[i] === TIMING_SECRET[i]) correctPrefix++;
+    else break;
+  }
+
+  res.type("html").send(`
+    <h1>Lab 42b: Timing Attack — Result (Fixed)</h1>
+    <p><a href="/">Back to labs</a> | <a href="/timing-attack-fixed">Try again</a></p>
+
+    <h3>Comparison Result</h3>
+    <p>Your guess: <code>${escapeHtml(guess)}</code> (${guess.length} chars)</p>
+    <p>Match: ${match
+      ? '<span style="color:green;font-weight:bold;">YES — correct key!</span>'
+      : '<span style="color:red;">NO</span>'}</p>
+    <p>Response time: <strong>${elapsed.toFixed(3)} ms</strong></p>
+
+    <p style="color:green;font-weight:bold;">&#10004; Response time is constant regardless of correct prefix length.</p>
+    <p>Correct prefix: ${correctPrefix} chars — but the attacker can't determine this from timing.</p>
+    <p class="info">Compare the response times between this and the vulnerable version with the same inputs.
+       The vulnerable version's time increases with each correct character; this one stays flat.</p>
+  `);
+});
+
+/* ========================================================================
+   LAB 43 — Unrestricted File Upload (CWE-434)
+   ======================================================================== */
+
+// Simulated file storage (in-memory, no actual disk writes)
+const uploadedFiles = { vuln: [], fixed: [] };
+
+// Parse multipart form data manually (no multer dependency needed)
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const contentType = req.headers["content-type"] || "";
+    const boundaryMatch = contentType.match(/boundary=(.+)/);
+    if (!boundaryMatch) return reject(new Error("No boundary found"));
+
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const boundary = "--" + boundaryMatch[1];
+      const parts = body.toString("binary").split(boundary).slice(1, -1);
+      const files = [];
+
+      for (const part of parts) {
+        const headerEnd = part.indexOf("\r\n\r\n");
+        if (headerEnd === -1) continue;
+        const headers = part.substring(0, headerEnd);
+        const content = part.substring(headerEnd + 4).replace(/\r\n$/, "");
+        const filenameMatch = headers.match(/filename="([^"]+)"/);
+        const nameMatch = headers.match(/name="([^"]+)"/);
+        if (filenameMatch) {
+          files.push({
+            fieldname: nameMatch ? nameMatch[1] : "file",
+            filename: filenameMatch[1],
+            content,
+            size: Buffer.byteLength(content, "binary"),
+          });
+        }
+      }
+      resolve(files);
+    });
+    req.on("error", reject);
+  });
+}
+
+app.get("/file-upload", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 43a: Unrestricted File Upload (Vulnerable)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Upload a file — the server accepts anything without validation:</p>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="file"><br><br>
+      <button type="submit">Upload</button>
+    </form>
+    <p class="info">Try uploading: <code>shell.php</code>, <code>exploit.html</code>, <code>payload.exe</code>,
+       or a file named <code>../../../etc/cron.d/backdoor</code></p>
+
+    ${uploadedFiles.vuln.length > 0 ? `
+      <h3>Uploaded Files</h3>
+      <table style="border-collapse:collapse;">
+        <tr><th style="padding:4px 12px;border:1px solid #ccc;">Filename</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Size</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Risk</th></tr>
+        ${uploadedFiles.vuln.map((f) => {
+          const ext = path.extname(f.filename).toLowerCase();
+          const dangerous = [".php", ".jsp", ".exe", ".sh", ".bat", ".html", ".svg", ".js"].includes(ext);
+          const traversal = f.filename.includes("..");
+          return `<tr>
+            <td style="padding:4px 12px;border:1px solid #ccc;"><code>${escapeHtml(f.filename)}</code></td>
+            <td style="padding:4px 12px;border:1px solid #ccc;">${f.size} bytes</td>
+            <td style="padding:4px 12px;border:1px solid #ccc;color:${dangerous || traversal ? "red" : "green"};">
+              ${traversal ? "&#9888; PATH TRAVERSAL" : dangerous ? "&#9888; Executable/active content" : "Low risk"}
+            </td></tr>`;
+        }).join("")}
+      </table>
+    ` : ""}
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#608b4e;">// Vulnerable: no validation at all</span>
+<span style="color:#9cdcfe;">const</span> filename = req.file.originalname; <span style="color:#608b4e;">// &#9888; user-controlled!</span>
+<span style="color:#9cdcfe;">const</span> savePath = path.join(uploadDir, filename);
+fs.writeFileSync(savePath, req.file.buffer);
+
+<span style="color:#608b4e;">// Problems:</span>
+<span style="color:#608b4e;">// 1. No extension check — .php, .jsp, .exe all accepted</span>
+<span style="color:#608b4e;">// 2. No content-type validation — MIME type is user-controlled</span>
+<span style="color:#608b4e;">// 3. No size limit — DoS via large uploads</span>
+<span style="color:#608b4e;">// 4. Path traversal — filename "../../etc/cron.d/job" escapes upload dir</span>
+<span style="color:#608b4e;">// 5. No rename — predictable filenames enable direct access</span></code></pre>
+
+    <h3>Attack Flow</h3>
+    <ol>
+      <li>Attacker uploads <code>webshell.php</code> with PHP code as content</li>
+      <li>Server saves it to <code>/uploads/webshell.php</code></li>
+      <li>Attacker visits <code>https://target.com/uploads/webshell.php</code></li>
+      <li>Web server executes the PHP — attacker has remote code execution</li>
+    </ol>
+
+    <details>
+      <summary><strong>Why is this dangerous?</strong></summary>
+      <ul>
+        <li><strong>Remote Code Execution:</strong> upload server-side scripts (.php, .jsp, .aspx)</li>
+        <li><strong>Stored XSS:</strong> upload .html or .svg with JavaScript</li>
+        <li><strong>Path Traversal:</strong> filename like <code>../../config.js</code> overwrites server files</li>
+        <li><strong>DoS:</strong> upload gigabyte-sized files without size limits</li>
+        <li><strong>Malware distribution:</strong> serve malicious .exe from trusted domain</li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/file-upload", async (req, res) => {
+  try {
+    const files = await parseMultipart(req);
+    if (files.length === 0) {
+      return res.type("html").send(`
+        <h1>Lab 43a: File Upload — No file received</h1>
+        <p><a href="/file-upload">Try again</a></p>
+      `);
+    }
+
+    const file = files[0];
+    // Vulnerable: store with original filename, no validation
+    uploadedFiles.vuln.push({ filename: file.filename, size: file.size });
+
+    const ext = path.extname(file.filename).toLowerCase();
+    const dangerous = [".php", ".jsp", ".exe", ".sh", ".bat", ".html", ".svg", ".js"].includes(ext);
+    const traversal = file.filename.includes("..");
+
+    res.type("html").send(`
+      <h1>Lab 43a: File Upload — Result (Vulnerable)</h1>
+      <p><a href="/">Back to labs</a> | <a href="/file-upload">Upload another</a></p>
+
+      <h3>Upload Accepted</h3>
+      <p>Filename: <code>${escapeHtml(file.filename)}</code></p>
+      <p>Size: ${file.size} bytes</p>
+      <p>Saved to: <code>/uploads/${escapeHtml(file.filename)}</code></p>
+
+      ${traversal
+        ? `<p style="color:red;font-weight:bold;">&#9888; PATH TRAVERSAL! Filename contains ".." — file could be written outside the upload directory.</p>
+           <p>Resolved path: <code>${escapeHtml(path.join("/uploads", file.filename))}</code></p>`
+        : ""}
+
+      ${dangerous
+        ? `<p style="color:red;font-weight:bold;">&#9888; DANGEROUS EXTENSION! <code>${escapeHtml(ext)}</code> files can execute code or scripts on the server.</p>`
+        : ""}
+
+      ${!dangerous && !traversal
+        ? '<p style="color:orange;">File accepted without any validation. Even "safe" extensions can be dangerous with MIME sniffing.</p>'
+        : ""}
+    `);
+  } catch (e) {
+    res.type("html").send(`
+      <h1>Lab 43a: File Upload — Error</h1>
+      <p><a href="/file-upload">Try again</a></p>
+      <p style="color:red;">${escapeHtml(e.message)}</p>
+    `);
+  }
+});
+
+app.get("/file-upload-fixed", (req, res) => {
+  res.type("html").send(`
+    <h1>Lab 43b: Restricted File Upload (Fixed)</h1>
+    <p><a href="/">Back to labs</a></p>
+
+    <p>Upload a file — only safe extensions, sanitized filename, and size limits:</p>
+    <form method="post" enctype="multipart/form-data">
+      <input type="file" name="file"><br><br>
+      <button type="submit">Upload</button>
+    </form>
+    <p class="info">Allowed: .png, .jpg, .jpeg, .gif, .pdf, .txt (max 1 MB)</p>
+
+    ${uploadedFiles.fixed.length > 0 ? `
+      <h3>Uploaded Files</h3>
+      <table style="border-collapse:collapse;">
+        <tr><th style="padding:4px 12px;border:1px solid #ccc;">Original Name</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Saved As</th>
+            <th style="padding:4px 12px;border:1px solid #ccc;">Size</th></tr>
+        ${uploadedFiles.fixed.map((f) => `<tr>
+          <td style="padding:4px 12px;border:1px solid #ccc;"><code>${escapeHtml(f.original)}</code></td>
+          <td style="padding:4px 12px;border:1px solid #ccc;"><code>${escapeHtml(f.saved)}</code></td>
+          <td style="padding:4px 12px;border:1px solid #ccc;">${f.size} bytes</td>
+        </tr>`).join("")}
+      </table>
+    ` : ""}
+    <hr>
+
+    <h3>Source Code</h3>
+    <pre ${PRE}><code><span style="color:#9cdcfe;">const</span> ALLOWED_EXT = <span style="color:#9cdcfe;">new</span> <span style="color:#4ec9b0;">Set</span>([<span style="color:#ce9178;">".png"</span>, <span style="color:#ce9178;">".jpg"</span>, <span style="color:#ce9178;">".jpeg"</span>, <span style="color:#ce9178;">".gif"</span>, <span style="color:#ce9178;">".pdf"</span>, <span style="color:#ce9178;">".txt"</span>]);
+<span style="color:#9cdcfe;">const</span> MAX_SIZE = <span style="color:#b5cea8;">1024</span> * <span style="color:#b5cea8;">1024</span>; <span style="color:#608b4e;">// 1 MB</span>
+
+<span style="color:#608b4e;">// 1. Check file size</span>
+<span style="color:#c586c0;">if</span> (file.size > MAX_SIZE) <span style="color:#c586c0;">return</span> reject(<span style="color:#ce9178;">"Too large"</span>);
+
+<span style="color:#608b4e;">// 2. Extract and validate extension</span>
+<span style="color:#9cdcfe;">const</span> ext = path.extname(file.originalname).toLowerCase();
+<span style="color:#c586c0;">if</span> (!ALLOWED_EXT.has(ext)) <span style="color:#c586c0;">return</span> reject(<span style="color:#ce9178;">"Extension not allowed"</span>);
+
+<span style="color:#608b4e;">// 3. Strip path components (prevent traversal)</span>
+<span style="color:#9cdcfe;">const</span> baseName = path.basename(file.originalname);
+
+<span style="color:#608b4e;">// 4. Generate random filename (prevent overwrites + direct access)</span>
+<span style="color:#9cdcfe;">const</span> safeName = crypto.randomUUID() + ext;
+<span style="color:#9cdcfe;">const</span> savePath = path.join(uploadDir, safeName);</code></pre>
+
+    <details>
+      <summary><strong>How does this fix it?</strong></summary>
+      <ul>
+        <li><strong>Extension allowlist:</strong> only known-safe types accepted</li>
+        <li><strong>Size limit:</strong> prevents DoS via oversized uploads</li>
+        <li><strong>path.basename():</strong> strips <code>../</code> sequences, preventing traversal</li>
+        <li><strong>Random filename:</strong> prevents predictable URLs and file overwrites</li>
+        <li>Additional best practices: validate MIME via magic bytes, store outside web root,
+            serve via a handler that sets <code>Content-Disposition: attachment</code></li>
+      </ul>
+    </details>
+  `);
+});
+
+app.post("/file-upload-fixed", async (req, res) => {
+  const ALLOWED_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".pdf", ".txt"]);
+  const MAX_SIZE = 1024 * 1024; // 1 MB
+
+  try {
+    const files = await parseMultipart(req);
+    if (files.length === 0) {
+      return res.type("html").send(`
+        <h1>Lab 43b: File Upload — No file received</h1>
+        <p><a href="/file-upload-fixed">Try again</a></p>
+      `);
+    }
+
+    const file = files[0];
+    const errors = [];
+
+    // 1. Size check
+    if (file.size > MAX_SIZE) {
+      errors.push(`File too large: ${file.size} bytes (max ${MAX_SIZE})`);
+    }
+
+    // 2. Extension allowlist
+    const ext = path.extname(file.filename).toLowerCase();
+    if (!ALLOWED_EXT.has(ext)) {
+      errors.push(`Extension "${ext || "(none)"}" not allowed. Allowed: ${[...ALLOWED_EXT].join(", ")}`);
+    }
+
+    // 3. Check for double extensions (e.g. shell.php.jpg — still suspicious)
+    const parts = file.filename.split(".");
+    const suspiciousDoubleExt = parts.length > 2 &&
+      [".php", ".jsp", ".exe", ".sh", ".bat", ".html", ".js"].includes("." + parts[parts.length - 2].toLowerCase());
+
+    if (errors.length > 0) {
+      return res.type("html").send(`
+        <h1>Lab 43b: File Upload — Rejected (Fixed)</h1>
+        <p><a href="/">Back to labs</a> | <a href="/file-upload-fixed">Try again</a></p>
+
+        <p style="color:green;font-weight:bold;">&#10004; Upload rejected:</p>
+        <ul>${errors.map((e) => `<li style="color:green;">${escapeHtml(e)}</li>`).join("")}</ul>
+        <p>Original filename: <code>${escapeHtml(file.filename)}</code></p>
+      `);
+    }
+
+    // 4. Sanitize: strip path, generate random name
+    const safeName = crypto.randomUUID() + ext;
+    uploadedFiles.fixed.push({ original: file.filename, saved: safeName, size: file.size });
+
+    res.type("html").send(`
+      <h1>Lab 43b: File Upload — Accepted (Fixed)</h1>
+      <p><a href="/">Back to labs</a> | <a href="/file-upload-fixed">Upload another</a></p>
+
+      <h3>Upload Accepted</h3>
+      <p>Original: <code>${escapeHtml(file.filename)}</code></p>
+      <p>Saved as: <code>${escapeHtml(safeName)}</code></p>
+      <p>Size: ${file.size} bytes</p>
+
+      <p style="color:green;font-weight:bold;">&#10004; File validated and renamed to prevent direct execution.</p>
+      ${suspiciousDoubleExt
+        ? `<p style="color:orange;">&#9888; Warning: double extension detected — may be an evasion attempt, but the final extension is safe.</p>`
+        : ""}
+    `);
+  } catch (e) {
+    res.type("html").send(`
+      <h1>Lab 43b: File Upload — Error</h1>
+      <p><a href="/file-upload-fixed">Try again</a></p>
+      <p style="color:red;">${escapeHtml(e.message)}</p>
+    `);
+  }
 });
 
 /* ========================================================================
